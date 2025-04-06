@@ -56,6 +56,9 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
         {
             CreateUI();
         }
+        
+        // Log network status
+        Debug.Log("GameManager initialized. Make sure your Photon AppId is set in the PhotonAppSettings asset.");
     }
 
     #region UI Creation
@@ -246,6 +249,7 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
             ? GenerateRandomRoomCode() 
             : createRoomInput.text;
         
+        Debug.Log($"Attempting to create room: {roomName}");
         StartGame(GameMode.Host, roomName);
     }
 
@@ -259,6 +263,7 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
             return;
         }
         
+        Debug.Log($"Attempting to join room: {roomName}");
         StartGame(GameMode.Client, roomName);
     }
 
@@ -273,38 +278,76 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public async void StartGame(GameMode mode, string roomName = null)
     {
-        // Create network runner if it doesn't exist
-        if (_runner == null)
+        try
         {
-            _runner = gameObject.AddComponent<NetworkRunner>();
-            _runner.ProvideInput = true;
+            // Check if AppIdFusion is set in PhotonAppSettings
+            var appSettings = Fusion.Photon.Realtime.PhotonAppSettings.Global.AppSettings;
+            if (string.IsNullOrEmpty(appSettings.AppIdFusion))
+            {
+                Debug.LogError("Photon AppId not set! Please set your Photon AppId in the PhotonAppSettings asset (Tools/Fusion/Realtime Settings)");
+                statusText.text = "Error: Photon AppId not set!";
+                Invoke("ReturnToLobby", 3f);
+                return;
+            }
+
+            // Create network runner if it doesn't exist
+            if (_runner == null)
+            {
+                _runner = gameObject.AddComponent<NetworkRunner>();
+                _runner.ProvideInput = true;
+            }
+
+            // Create SceneRef from the current scene's build index
+            var scene = SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex);
+
+            // Start connection and create/join session
+            var startGameArgs = new StartGameArgs()
+            {
+                GameMode = mode,
+                SessionName = roomName,
+                Scene = scene,
+                SceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>(),
+                PlayerCount = maxPlayers
+            };
+
+            // Show connecting status
+            statusText.text = (mode == GameMode.Host) 
+                ? "Creating room..." 
+                : "Joining room...";
+            ShowPanel(connectionPanel);
+
+            Debug.Log($"Starting {mode} mode with room name: {roomName}");
+
+            // Start or join game session
+            var result = await _runner.StartGame(startGameArgs);
+            
+            // Check the result
+            Debug.Log($"Connection result: {result.Ok}, {result.ShutdownReason}");
+            
+            if (!result.Ok)
+            {
+                // Handle failed connection
+                Debug.LogError($"Failed to connect: {result.ShutdownReason}");
+                statusText.text = $"Connection failed: {result.ShutdownReason}";
+                Invoke("ReturnToLobby", 3f);
+            }
         }
-
-        // Create SceneRef from the current scene's build index
-        var scene = SceneRef.FromIndex(SceneManager.GetActiveScene().buildIndex);
-
-        // Start connection and create/join session
-        var startGameArgs = new StartGameArgs()
+        catch (System.Exception ex)
         {
-            GameMode = mode,
-            SessionName = roomName,
-            Scene = scene,
-            SceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>(),
-            PlayerCount = maxPlayers
-        };
+            Debug.LogError($"Error starting game: {ex.Message}");
+            statusText.text = $"Error: {ex.Message}";
+            Invoke("ReturnToLobby", 3f);
+        }
+    }
 
-        // Show connecting status
-        statusText.text = (mode == GameMode.Host) 
-            ? "Creating room..." 
-            : "Joining room...";
-        ShowPanel(connectionPanel);
-
-        // Start or join game session
-        await _runner.StartGame(startGameArgs);
+    private void ReturnToLobby()
+    {
+        ShowPanel(lobbyPanel);
     }
 
     public void LeaveGame()
     {
+        Debug.Log("Leaving game session");
         if (_runner != null)
         {
             // Shutdown the network runner
@@ -398,7 +441,7 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
     
     public void OnConnectedToServer(NetworkRunner runner)
     {
-        Debug.Log("Connected to server");
+        Debug.Log($"Connected to server, SessionInfo: {(runner.SessionInfo != null ? runner.SessionInfo.Name : "null")}");
         
         // If we've successfully connected, show the room panel
         if (runner.SessionInfo != null)
@@ -407,30 +450,42 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
             roomCodeText.text = _roomCode;
             ShowPanel(roomPanel);
         }
+        else
+        {
+            Debug.LogWarning("Connected to server but SessionInfo is null");
+            statusText.text = "Connected but no room info available";
+            Invoke("ReturnToLobby", 3f);
+        }
     }
     
     // Updated method signature to match newer Fusion API
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
     {
         Debug.Log($"Disconnected from server: {reason}");
-        ShowPanel(lobbyPanel);
+        statusText.text = $"Disconnected: {reason}";
+        Invoke("ReturnToLobby", 3f);
     }
     
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token)
     {
         // Auto-accept connection requests
+        Debug.Log($"Connection request from: {request.RemoteAddress}");
         request.Accept();
     }
     
     public void OnConnectFailed(NetworkRunner runner, NetAddress remoteAddress, NetConnectFailedReason reason)
     {
-        Debug.Log($"Connect failed: {reason}");
-        ShowPanel(lobbyPanel);
+        Debug.LogError($"Connect failed: {reason}, Address: {remoteAddress}");
+        statusText.text = $"Connection failed: {reason}";
+        Invoke("ReturnToLobby", 3f);
     }
     
     public void OnUserSimulationMessage(NetworkRunner runner, SimulationMessagePtr message) { }
     
-    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList) { }
+    public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList) 
+    {
+        Debug.Log($"Session list updated: {sessionList.Count} sessions found");
+    }
     
     public void OnCustomAuthenticationResponse(NetworkRunner runner, Dictionary<string, object> data) { }
     

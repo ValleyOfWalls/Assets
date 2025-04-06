@@ -45,10 +45,14 @@ public class Player : NetworkBehaviour
             _renderer = GetComponentInChildren<MeshRenderer>();
             _nicknameText = GetComponentInChildren<TextMesh>();
         }
+        
+        Debug.Log($"Player awake: {gameObject.name}");
     }
     
     public override void Spawned()
     {
+        Debug.Log($"Player spawned: HasInputAuthority={Object.HasInputAuthority}, HasStateAuthority={Object.HasStateAuthority}");
+        
         // Setup player for the local player
         if (Object.HasInputAuthority)
         {
@@ -58,6 +62,7 @@ public class Player : NetworkBehaviour
             // Set default properties
             if (string.IsNullOrEmpty(Nickname.ToString()))
             {
+                Debug.Log($"Setting default nickname for player {Runner.LocalPlayer.PlayerId}");
                 RPC_SetNickname($"Player {Runner.LocalPlayer.PlayerId}");
             }
             
@@ -65,6 +70,7 @@ public class Player : NetworkBehaviour
             if (Object.HasStateAuthority)
             {
                 PlayerColor = new Color(Random.value, Random.value, Random.value);
+                Debug.Log($"Set random color: {PlayerColor}");
             }
         }
         
@@ -101,6 +107,8 @@ public class Player : NetworkBehaviour
     
     private void CreatePlayerModel()
     {
+        Debug.Log("Creating player model");
+        
         // Create capsule for player model
         GameObject model = GameObject.CreatePrimitive(PrimitiveType.Capsule);
         model.transform.SetParent(transform);
@@ -137,6 +145,8 @@ public class Player : NetworkBehaviour
     
     private void SetupCamera()
     {
+        Debug.Log("Setting up player camera");
+        
         // Create camera for local player
         GameObject cameraObj = new GameObject("PlayerCamera");
         _cameraTransform = cameraObj.transform;
@@ -152,6 +162,7 @@ public class Player : NetworkBehaviour
         // Destroy existing main camera if it exists
         if (Camera.main != null && Camera.main.gameObject != cameraObj)
         {
+            Debug.Log("Replacing existing main camera");
             Destroy(Camera.main.gameObject);
         }
     }
@@ -189,6 +200,7 @@ public class Player : NetworkBehaviour
         if (_renderer != null)
         {
             _renderer.material.color = PlayerColor;
+            Debug.Log($"Updated player color to: {PlayerColor}");
         }
     }
     
@@ -198,12 +210,14 @@ public class Player : NetworkBehaviour
         if (_nicknameText != null)
         {
             _nicknameText.text = Nickname.ToString();
+            Debug.Log($"Updated player nickname to: {Nickname}");
         }
     }
     
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     public void RPC_SetNickname(string newNickname)
     {
+        Debug.Log($"RPC_SetNickname called with: {newNickname}");
         Nickname = newNickname;
     }
 }
