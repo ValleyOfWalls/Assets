@@ -448,17 +448,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 4fd9a7eea81898d4eb5b4f305329b9b0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  connectionPanel: {fileID: 0}
-  lobbyPanel: {fileID: 0}
-  roomPanel: {fileID: 0}
-  createRoomInput: {fileID: 0}
-  joinRoomInput: {fileID: 0}
-  roomCodeText: {fileID: 0}
-  playerCountText: {fileID: 0}
-  statusText: {fileID: 0}
-  playerPrefab:
-    RawGuidValue: 00000000000000000000000000000000
-  maxPlayers: 12
 --- !u!4 &1369693649
 Transform:
   m_ObjectHideFlags: 0

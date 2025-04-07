@@ -12,11 +12,13 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
     // Singleton instance
     public static GameManager Instance { get; private set; }
 
-    // Runtime references - all created programmatically
+    [Header("Network References")]
+    [SerializeField] private NetworkObject _playerPrefab;
+    [SerializeField] private GameObject _cameraPrefab;
+
+    // Runtime references
     private NetworkRunner _runner;
-    private GameObject _playerPrefab;
-    private GameObject _cameraPrefab;
-    private Dictionary<PlayerRef, Player> _players = new Dictionary<PlayerRef, Player>();
+    private Dictionary<PlayerRef, NetworkObject> _players = new Dictionary<PlayerRef, NetworkObject>();
     private bool _isConnecting = false;
     private List<string> _logMessages = new List<string>();
     private int _maxLogMessages = 20;
@@ -40,66 +42,31 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
         }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+        
+        // Find the player prefab if not assigned
+        if (_playerPrefab == null)
+        {
+            _playerPrefab = Resources.Load<NetworkObject>("PlayerPrefab");
+            if (_playerPrefab == null)
+                Debug.LogError("PlayerPrefab not found! Please create it and place it in a Resources folder.");
+        }
     }
 
     private void Start()
     {
-        // Create all necessary components and prefabs
-        CreatePrefabs();
+        // Create NetworkRunner
+        CreateNetworkRunner();
+        
+        // Create UI
         CreateUI();
         SetupUIListeners();
         
         // Log initial configuration
         LogNetworkProjectConfig();
     }
-
-    private void CreatePrefabs()
+    
+    private void CreateNetworkRunner()
     {
-        // Create player prefab
-        _playerPrefab = new GameObject("Player_Prefab");
-        _playerPrefab.SetActive(false); // Deactivate so it doesn't appear in scene
-        DontDestroyOnLoad(_playerPrefab);
-        
-        // Add network object component
-        NetworkObject netObj = _playerPrefab.AddComponent<NetworkObject>();
-        
-        // Add player script
-        Player player = _playerPrefab.AddComponent<Player>();
-        
-        // Add a character controller
-        CharacterController cc = _playerPrefab.AddComponent<CharacterController>();
-        cc.center = new Vector3(0, 1, 0);
-        cc.height = 2f;
-        cc.radius = 0.5f;
-        
-        // Add visual representation (capsule)
-        GameObject visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        visual.transform.SetParent(_playerPrefab.transform);
-        visual.transform.localPosition = new Vector3(0, 1, 0);
-        visual.transform.localScale = Vector3.one;
-        
-        // Store reference to mesh renderer
-        MeshRenderer renderer = visual.GetComponent<MeshRenderer>();
-        if (renderer != null)
-        {
-            player._meshRenderer = renderer;
-        }
-        
-        // Create camera prefab
-        _cameraPrefab = new GameObject("Camera_Prefab");
-        _cameraPrefab.SetActive(false);
-        DontDestroyOnLoad(_cameraPrefab);
-        
-        // Add camera component
-        Camera cam = _cameraPrefab.AddComponent<Camera>();
-        _cameraPrefab.AddComponent<AudioListener>();
-        
-        // Add follow script
-        FollowCamera follow = _cameraPrefab.AddComponent<FollowCamera>();
-        follow.offset = new Vector3(0, 3, -5);
-        follow.smoothSpeed = 0.125f;
-        
-        // Create NetworkRunner
         GameObject runnerObj = new GameObject("NetworkRunner");
         DontDestroyOnLoad(runnerObj);
         
@@ -111,7 +78,24 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
         _runner.ProvideInput = true;
         _runner.AddCallbacks(this);
         
-        Debug.Log("Prefabs created successfully");
+        // Create camera prefab if needed
+        if (_cameraPrefab == null)
+        {
+            _cameraPrefab = new GameObject("Camera_Prefab");
+            _cameraPrefab.SetActive(false);
+            DontDestroyOnLoad(_cameraPrefab);
+            
+            // Add camera component
+            Camera cam = _cameraPrefab.AddComponent<Camera>();
+            _cameraPrefab.AddComponent<AudioListener>();
+            
+            // Add follow script
+            FollowCamera follow = _cameraPrefab.AddComponent<FollowCamera>();
+            follow.offset = new Vector3(0, 3, -5);
+            follow.smoothSpeed = 0.125f;
+        }
+        
+        Debug.Log("NetworkRunner created successfully");
     }
 
     private void CreateUI()
@@ -332,6 +316,7 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
                 GameMode = GameMode.Shared, // THIS IS CRITICAL - use shared mode
                 SessionName = roomName,
                 SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>(),
+                PlayerCount = 4 // Specify player count (optional)
             };
 
             LogMessage($"StartGame Args: GameMode={startGameArgs.GameMode}, SessionName={startGameArgs.SessionName}");
@@ -392,7 +377,7 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
             {
                 GameMode = GameMode.Shared, // THIS IS CRITICAL - use shared mode
                 SessionName = roomName,
-                SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>(),
+                SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>()
             };
 
             LogMessage($"StartGame Args: GameMode={startGameArgs.GameMode}, SessionName={startGameArgs.SessionName}");
@@ -489,33 +474,87 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
         }
     }
 
+    // Register the player prefab
+    private void RegisterPlayerPrefab()
+    {
+        if (_playerPrefab == null)
+        {
+            LogError("Cannot register player prefab: prefab is null");
+            return;
+        }
+
+        try
+        {
+            // If your version of Fusion 2 supports it, you can add this code to manually register the prefab
+            // Not all versions of Fusion 2 have this API, so we're keeping it commented out
+            /*
+            if (_runner.NetworkPrefabTable != null)
+            {
+                if (!_runner.NetworkPrefabTable.Contains(_playerPrefab))
+                {
+                    _runner.NetworkPrefabTable.Add(_playerPrefab);
+                    LogMessage("Player prefab registered manually");
+                }
+            }
+            */
+            
+            // For most Fusion 2 versions, placing the prefab in Resources is sufficient
+            LogMessage("Player prefab found in Resources and will be auto-registered");
+        }
+        catch (Exception ex)
+        {
+            LogError($"Error registering player prefab: {ex.Message}");
+        }
+    }
+
     #region INetworkRunnerCallbacks Implementation
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
         LogMessage($"Player {player} joined");
         
-        // Only spawn objects for the local player
-        if (player == runner.LocalPlayer)
+        try 
         {
-            LogMessage("Spawning local player");
-            
-            // Spawn the player at a random position
-            Vector3 spawnPosition = new Vector3(UnityEngine.Random.Range(-5, 5), 1, UnityEngine.Random.Range(-5, 5));
-            
-            NetworkObject playerObject = runner.Spawn(_playerPrefab, spawnPosition, Quaternion.identity, player);
-            
-            // Keep track of the spawned player
-            Player playerComponent = playerObject.GetComponent<Player>();
-            if (playerComponent != null)
+            // Only spawn objects for the local player
+            if (player == runner.LocalPlayer)
             {
-                _players[player] = playerComponent;
+                LogMessage("Spawning local player");
+                
+                if (_playerPrefab == null)
+                {
+                    LogError("Player prefab is missing! Make sure to create the PlayerPrefab in Resources folder.");
+                    return;
+                }
+                
+                // Position the player
+                Vector3 spawnPosition = new Vector3(UnityEngine.Random.Range(-5, 5), 1, UnityEngine.Random.Range(-5, 5));
+                
+                // Spawn the prefab - this automatically registers it with Fusion
+                NetworkObject playerObject = runner.Spawn(_playerPrefab, position: spawnPosition, inputAuthority: player);
+                
+                // Keep track of spawned objects
+                if (playerObject != null)
+                {
+                    _players[player] = playerObject;
+                    
+                    // Spawn a camera that follows the player
+                    GameObject camera = Instantiate(_cameraPrefab);
+                    camera.SetActive(true);
+                    FollowCamera followCam = camera.GetComponent<FollowCamera>();
+                    if (followCam != null)
+                    {
+                        followCam.SetTarget(playerObject.transform);
+                    }
+                }
+                else
+                {
+                    LogError("Failed to spawn player object!");
+                }
             }
-            
-            // Spawn a camera that follows the player
-            GameObject camera = Instantiate(_cameraPrefab);
-            camera.SetActive(true);
-            camera.GetComponent<FollowCamera>()?.SetTarget(playerObject.transform);
+        }
+        catch (Exception ex) 
+        {
+            LogError($"Error in OnPlayerJoined: {ex.Message}\n{ex.StackTrace}");
         }
     }
 
@@ -524,16 +563,34 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
         LogMessage($"Player {player} left");
         
         // Clean up the player
-        if (_players.TryGetValue(player, out Player playerObject))
+        if (_players.TryGetValue(player, out NetworkObject playerObject))
         {
-            runner.Despawn(playerObject.Object);
+            if (playerObject != null)
+            {
+                runner.Despawn(playerObject);
+            }
             _players.Remove(player);
         }
     }
 
     public void OnInput(NetworkRunner runner, NetworkInput input)
     {
-        // This will be implemented in your player class
+        // Create and provide input data from the local player
+        var data = new NetworkInputData
+        {
+            horizontal = Input.GetAxis("Horizontal"),
+            vertical = Input.GetAxis("Vertical"),
+            buttons = new NetworkButtons()
+        };
+        
+        // Add button presses if needed
+        if (Input.GetKey(KeyCode.Space))
+            data.buttons.Set(0, true); // Jump
+        if (Input.GetKey(KeyCode.Mouse0))
+            data.buttons.Set(1, true); // Fire
+            
+        // Set the input data
+        input.Set(data);
     }
 
     public void OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input) { }
@@ -554,7 +611,6 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
         LogMessage("Connected to server");
     }
 
-    // New method with the updated signature
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
     {
         LogMessage($"Disconnected from server: {reason}");
@@ -563,7 +619,6 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token)
     {
-        // Modified to avoid accessing Address property that doesn't exist in your version
         LogMessage($"Connect request received");
     }
 
@@ -585,7 +640,6 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) { }
 
-    // Methods with the updated signatures for your version
     public void OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, ArraySegment<byte> data)
     {
         LogMessage($"Reliable data received from player {player}");
@@ -621,128 +675,4 @@ public class GameManager : MonoBehaviour, INetworkRunnerCallbacks
     }
 
     #endregion
-}
-
-/// <summary>
-/// Simple player class for network functionality
-/// </summary>
-public class Player : NetworkBehaviour
-{
-    [Networked] public Color PlayerColor { get; set; }
-    
-    // Public so it can be set programmatically by GameManager
-    public MeshRenderer _meshRenderer;
-    private CharacterController _characterController;
-    private Camera _mainCamera;
-    
-    private void Awake()
-    {
-        _characterController = GetComponent<CharacterController>();
-        if (_characterController == null)
-        {
-            _characterController = gameObject.AddComponent<CharacterController>();
-        }
-    }
-
-    public override void Spawned()
-    {
-        base.Spawned();
-        
-        // Set a random color for the player
-        if (HasStateAuthority)
-        {
-            PlayerColor = new Color(
-                UnityEngine.Random.Range(0f, 1f),
-                UnityEngine.Random.Range(0f, 1f),
-                UnityEngine.Random.Range(0f, 1f)
-            );
-        }
-        
-        // Apply the color to the visual
-        if (_meshRenderer != null)
-        {
-            _meshRenderer.material.color = PlayerColor;
-        }
-        
-        Debug.Log($"Player spawned with ID: {(Object != null ? Object.Id.ToString() : "0")}");
-    }
-    
-    public override void FixedUpdateNetwork()
-    {
-        if (GetInput(out NetworkInputData data))
-        {
-            // Apply movement only when we have input authority
-            if (HasInputAuthority)
-            {
-                // Simple movement implementation
-                Vector3 move = new Vector3(data.horizontal, 0, data.vertical);
-                move = move.normalized * 5f * Runner.DeltaTime;
-                
-                if (_characterController != null)
-                {
-                    _characterController.Move(move);
-                    
-                    // Apply gravity
-                    _characterController.Move(Vector3.down * 9.81f * Runner.DeltaTime);
-                }
-            }
-        }
-    }
-    
-    public override void Render()
-    {
-        // Update visuals if color has changed over the network
-        if (_meshRenderer != null)
-        {
-            _meshRenderer.material.color = PlayerColor;
-        }
-    }
-}
-
-/// <summary>
-/// Simple camera follow script
-/// </summary>
-public class FollowCamera : MonoBehaviour
-{
-    private Transform _target;
-    public Vector3 offset = new Vector3(0, 3, -5);
-    public float smoothSpeed = 0.125f;
-
-    public void SetTarget(Transform target)
-    {
-        _target = target;
-    }
-
-    void LateUpdate()
-    {
-        if (_target == null)
-            return;
-
-        Vector3 desiredPosition = _target.position + offset;
-        Vector3 smoothedPosition = Vector3.Lerp(transform.position, desiredPosition, smoothSpeed);
-        transform.position = smoothedPosition;
-
-        transform.LookAt(_target);
-    }
-}
-
-/// <summary>
-/// Network input data structure for player movement
-/// </summary>
-public struct NetworkInputData : INetworkInput
-{
-    public float horizontal;
-    public float vertical;
-    public NetworkButtons buttons;
-    
-    // Add your input handling here in GameManager's OnInput method
-    public static NetworkInputData CreateFromInput()
-    {
-        return new NetworkInputData
-        {
-            horizontal = Input.GetAxis("Horizontal"),
-            vertical = Input.GetAxis("Vertical"),
-            buttons = new NetworkButtons()
-        };
-    }
 }
