@@ -2,6 +2,7 @@ using Fusion;
 using Fusion.Sockets;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
@@ -13,6 +14,9 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     // Session info
     private string _currentRoomName;
     public bool IsConnected => _runner != null && _runner.IsRunning;
+    
+    // Connection settings
+    private const int MAX_PLAYERS = 4;
 
     public void Initialize()
     {
@@ -24,6 +28,7 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         if (_runner != null)
         {
+            GameManager.Instance.LogManager.LogMessage("Shutting down NetworkRunner...");
             _runner.Shutdown();
             _runner = null;
         }
@@ -74,12 +79,20 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         // Create and join a shared mode session
         try
         {
+            // Create session properties to help identify the session
+            Dictionary<string, SessionProperty> customProps = new Dictionary<string, SessionProperty>()
+            {
+                { "CreatedTime", (SessionProperty)DateTime.UtcNow.Ticks },
+                { "GameVersion", (SessionProperty)"1.0" }
+            };
+            
             var startGameArgs = new StartGameArgs()
             {
                 GameMode = GameMode.Shared, // THIS IS CRITICAL - use shared mode
                 SessionName = roomName,
+                SessionProperties = customProps,
                 SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>(),
-                PlayerCount = 4 // Specify player count (optional)
+                PlayerCount = MAX_PLAYERS
             };
 
             GameManager.Instance.LogManager.LogMessage($"StartGame Args: GameMode={startGameArgs.GameMode}, SessionName={startGameArgs.SessionName}");
@@ -89,6 +102,7 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
             if (result.Ok)
             {
                 GameManager.Instance.LogManager.LogMessage($"Room created successfully: {roomName}");
+                GameManager.Instance.LogManager.LogMessage($"Local player ID: {_runner.LocalPlayer.PlayerId}");
                 GameManager.Instance.UIManager.UpdateStatus($"Room '{roomName}' created!");
                 
                 // Hide the connection panel
@@ -146,6 +160,8 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
             if (result.Ok)
             {
                 GameManager.Instance.LogManager.LogMessage($"Joined room successfully: {roomName}");
+                GameManager.Instance.LogManager.LogMessage($"Local player ID: {_runner.LocalPlayer.PlayerId}");
+                GameManager.Instance.LogManager.LogMessage($"Players in session: {_runner.ActivePlayers.Count()}");
                 GameManager.Instance.UIManager.UpdateStatus($"Joined room: {roomName}");
                 
                 // Hide the connection panel
@@ -175,14 +191,26 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
-        GameManager.Instance.LogManager.LogMessage($"Player {player} joined");
+        GameManager.Instance.LogManager.LogMessage($"Player {player} joined the network");
+        
+        // Update all clients about the player count
+        string playerCountMessage = $"Players in room: {runner.ActivePlayers.Count()}";
+        GameManager.Instance.LogManager.LogMessage(playerCountMessage);
+        
+        // Call player manager to handle the new player
         GameManager.Instance.PlayerManager.OnPlayerJoined(runner, player);
     }
 
     public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
     {
-        GameManager.Instance.LogManager.LogMessage($"Player {player} left");
+        GameManager.Instance.LogManager.LogMessage($"Player {player} left the network");
+        
+        // Update player manager
         GameManager.Instance.PlayerManager.OnPlayerLeft(runner, player);
+        
+        // Update all clients about the player count
+        string playerCountMessage = $"Players in room: {runner.ActivePlayers.Count()}";
+        GameManager.Instance.LogManager.LogMessage(playerCountMessage);
     }
 
     public void OnInput(NetworkRunner runner, NetworkInput input)
@@ -209,13 +237,14 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
     {
-        GameManager.Instance.LogManager.LogMessage($"Shutdown: {shutdownReason}");
+        GameManager.Instance.LogManager.LogMessage($"Network shutdown: {shutdownReason}");
         
         // Clear the players
         GameManager.Instance.PlayerManager.ClearPlayers();
         
         // Show the connection UI
         GameManager.Instance.UIManager.ShowConnectUI();
+        GameManager.Instance.UIManager.UpdateStatus($"Disconnected: {shutdownReason}");
     }
 
     public void OnConnectedToServer(NetworkRunner runner)
@@ -227,6 +256,7 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         GameManager.Instance.LogManager.LogMessage($"Disconnected from server: {reason}");
         GameManager.Instance.UIManager.ShowConnectUI();
+        GameManager.Instance.UIManager.UpdateStatus($"Disconnected: {reason}");
     }
 
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token)
@@ -245,12 +275,23 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnSessionListUpdated(NetworkRunner runner, List<SessionInfo> sessionList)
     {
-        GameManager.Instance.LogManager.LogMessage($"Session list updated: {sessionList.Count} sessions");
+        int sessionCount = sessionList?.Count ?? 0;
+        GameManager.Instance.LogManager.LogMessage($"Session list updated: {sessionCount} sessions");
+        
+        if (sessionList != null && sessionList.Count > 0)
+        {
+            foreach (var session in sessionList)
+            {
+                GameManager.Instance.LogManager.LogMessage($"Session: {session.Name}, Players: {session.PlayerCount}/{session.MaxPlayers}");
+            }
+        }
     }
 
     public void OnCustomAuthenticationResponse(NetworkRunner runner, Dictionary<string, object> data) { }
 
-    public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) { }
+    public void OnHostMigration(NetworkRunner runner, HostMigrationToken hostMigrationToken) {
+        GameManager.Instance.LogManager.LogMessage("Host migration occurred");
+    }
 
     public void OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, ArraySegment<byte> data)
     {
