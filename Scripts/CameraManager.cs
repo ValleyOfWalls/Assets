@@ -20,6 +20,12 @@ public class CameraManager : MonoBehaviour
         // Add camera component
         Camera cam = _cameraPrefab.AddComponent<Camera>();
         
+        // Configure for 2D
+        cam.orthographic = true;
+        cam.orthographicSize = 5f; // Set to appropriate size for the game
+        cam.clearFlags = CameraClearFlags.SolidColor;
+        cam.backgroundColor = new Color(0.2f, 0.2f, 0.3f); // Dark blue-ish background
+        
         // We'll only add an AudioListener if one doesn't already exist in the scene
         // This fixes the "2 audio listeners" warning
         if (FindObjectsByType<AudioListener>(FindObjectsSortMode.None).Length == 0)
@@ -34,7 +40,7 @@ public class CameraManager : MonoBehaviour
         
         // Add follow script
         FollowCamera follow = _cameraPrefab.AddComponent<FollowCamera>();
-        follow.offset = new Vector3(0, 3, -5);
+        follow.offset = new Vector3(0, 10, 0); // Camera looks down from above for 2D
         follow.smoothSpeed = 0.125f;
         
         GameManager.Instance.LogManager.LogMessage("Camera prefab created");
@@ -57,10 +63,20 @@ public class CameraManager : MonoBehaviour
         _activeCamera = Instantiate(_cameraPrefab);
         _activeCamera.SetActive(true);
         
+        // Get camera component
+        Camera camera = _activeCamera.GetComponent<Camera>();
+        if (camera != null)
+        {
+            // Make sure it's set to orthographic for 2D view
+            camera.orthographic = true;
+            camera.orthographicSize = 10f; // Set to appropriate size to see multiple players
+        }
+        
         FollowCamera followCam = _activeCamera.GetComponent<FollowCamera>();
         if (followCam != null)
         {
             followCam.SetTarget(playerTransform);
+            followCam.offset = new Vector3(0, 10, 0); // Top-down view for 2D
             GameManager.Instance.LogManager.LogMessage("Camera created and following player");
         }
         else

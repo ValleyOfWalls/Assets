@@ -12,11 +12,14 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     private bool _isConnecting = false;
     
     // Session info
-    private string _currentRoomName;
+    private string _currentRoomName = "asd"; // Default room name
     public bool IsConnected => _runner != null && _runner.IsRunning;
     
     // Connection settings
     private const int MAX_PLAYERS = 4;
+    
+    // Dictionary to store player name by player ref for rejoining
+    private Dictionary<string, PlayerRef> _playerRefsByName = new Dictionary<string, PlayerRef>();
 
     public void Initialize()
     {
@@ -68,7 +71,7 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
 
         if (string.IsNullOrEmpty(roomName))
         {
-            roomName = $"Room_{UnityEngine.Random.Range(0, 10000)}";
+            roomName = "asd"; // Default to "asd" if empty
         }
 
         _currentRoomName = roomName;
@@ -133,9 +136,7 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
 
         if (string.IsNullOrEmpty(roomName))
         {
-            GameManager.Instance.LogManager.LogMessage("Room name is empty");
-            GameManager.Instance.UIManager.UpdateStatus("Please enter a room name");
-            return;
+            roomName = "asd"; // Default to "asd" if empty
         }
 
         _currentRoomName = roomName;
@@ -186,6 +187,12 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         return _runner;
     }
+    
+    public bool CheckIsRejoining(string playerName)
+    {
+        // Check if this player name was previously in the session
+        return GameManager.Instance.LobbyManager.IsPlayerRegistered(playerName);
+    }
 
     #region INetworkRunnerCallbacks Implementation
 
@@ -205,12 +212,23 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         GameManager.Instance.LogManager.LogMessage($"Player {player} left the network");
         
+        // Get player name before removing
+        string playerName = GameManager.Instance.LobbyManager.GetPlayerName(player);
+        
         // Update player manager
         GameManager.Instance.PlayerManager.OnPlayerLeft(runner, player);
         
         // Update all clients about the player count
         string playerCountMessage = $"Players in room: {runner.ActivePlayers.Count()}";
         GameManager.Instance.LogManager.LogMessage(playerCountMessage);
+        
+        // Update lobby (don't remove data to allow rejoining)
+        if (!string.IsNullOrEmpty(playerName))
+        {
+            // We don't remove the player from LobbyManager to allow for rejoin
+            // But we do need to update the UI
+            GameManager.Instance.UIManager.UpdatePlayersList();
+        }
     }
 
     public void OnInput(NetworkRunner runner, NetworkInput input)
@@ -224,10 +242,10 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         };
         
         // Add button presses if needed
-        if (Input.GetKey(KeyCode.Space))
+        if (Input.GetKeyDown(KeyCode.Space))
             data.buttons.Set(0, true); // Jump
-        if (Input.GetKey(KeyCode.Mouse0))
-            data.buttons.Set(1, true); // Fire
+        if (Input.GetKeyDown(KeyCode.R))
+            data.buttons.Set(1, true); // Ready toggle
             
         // Set the input data
         input.Set(data);
@@ -241,6 +259,9 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         
         // Clear the players
         GameManager.Instance.PlayerManager.ClearPlayers();
+        
+        // Reset lobby
+        GameManager.Instance.LobbyManager.Reset();
         
         // Show the connection UI
         GameManager.Instance.UIManager.ShowConnectUI();
@@ -261,7 +282,8 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token)
     {
-        GameManager.Instance.LogManager.LogMessage($"Connect request received");
+        GameManager.Instance.LogManager.LogMessage($"Connect request received from {request.RemoteAddress}");
+        // Always accept connection requests in this simple implementation
     }
 
     public void OnConnectFailed(NetworkRunner runner, NetAddress remoteAddress, NetConnectFailedReason reason)

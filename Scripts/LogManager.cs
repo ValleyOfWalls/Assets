@@ -39,7 +39,7 @@ public class LogManager : MonoBehaviour
         _debugText.fontSize = 12;
         _debugText.alignment = TextAlignmentOptions.Left;
         _debugText.color = Color.white;
-        _debugText.enableWordWrapping = true;
+        _debugText.textWrappingMode = TextWrappingModes.Normal; // Updated from enableWordWrapping = true
         _debugText.overflowMode = TextOverflowModes.Truncate; // Ensure text is truncated, not scrollable
         
         _debugRect = debugObj.GetComponent<RectTransform>();

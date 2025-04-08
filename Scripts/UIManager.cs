@@ -1,16 +1,34 @@
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using System.Collections.Generic;
 
 public class UIManager : MonoBehaviour
 {
     // UI references
     private Canvas _uiCanvas;
     private TMP_InputField _roomNameInput;
+    private TMP_InputField _playerNameInput;
     private Button _createRoomButton;
     private Button _joinRoomButton;
     private TMP_Text _statusText;
     private GameObject _connectPanel;
+    
+    // Lobby UI references
+    private GameObject _lobbyPanel;
+    private Button _readyButton;
+    private TMP_Text _countdownText;
+    private Transform _playerListContent;
+    private GameObject _playerListItemPrefab;
+    
+    // Player name tracking
+    private string _localPlayerName = "";
+    
+    // Dictionary to keep track of player list items in UI
+    private Dictionary<string, GameObject> _playerListItems = new Dictionary<string, GameObject>();
+    
+    // Debug controls
+    private Button _debugReadyButton;
     
     public void Initialize()
     {
@@ -19,6 +37,11 @@ public class UIManager : MonoBehaviour
         // Create UI
         CreateUI();
         SetupUIListeners();
+        
+        // Subscribe to LobbyManager events
+        GameManager.Instance.LobbyManager.OnAllPlayersReady += HandleAllPlayersReady;
+        GameManager.Instance.LobbyManager.OnCountdownComplete += HandleCountdownComplete;
+        GameManager.Instance.LobbyManager.OnPlayerReadyStatusChanged += HandlePlayerReadyStatusChanged;
     }
     
     private void CreateUI()
@@ -32,6 +55,22 @@ public class UIManager : MonoBehaviour
         DontDestroyOnLoad(canvasObj);
 
         // Create a panel for connection UI
+        CreateConnectionPanel(canvasObj);
+        
+        // Create a panel for lobby UI
+        CreateLobbyPanel(canvasObj);
+        
+        // Create debug controls for testing
+        CreateDebugControls(canvasObj);
+        
+        // Hide lobby panel initially
+        _lobbyPanel.SetActive(false);
+        
+        GameManager.Instance.LogManager.LogMessage("UI created successfully");
+    }
+    
+    private void CreateConnectionPanel(GameObject parentCanvas)
+    {
         GameObject panelObj = new GameObject("Connect Panel");
         panelObj.transform.SetParent(_uiCanvas.transform, false);
         _connectPanel = panelObj;
@@ -58,6 +97,51 @@ public class UIManager : MonoBehaviour
         titleRect.offsetMin = Vector2.zero;
         titleRect.offsetMax = Vector2.zero;
 
+        // Add player name input
+        GameObject nameInputObj = new GameObject("Player Name Input");
+        nameInputObj.transform.SetParent(panelObj.transform, false);
+        _playerNameInput = nameInputObj.AddComponent<TMP_InputField>();
+        Image nameInputImage = nameInputObj.AddComponent<Image>();
+        nameInputImage.color = new Color(0.2f, 0.2f, 0.2f, 1f);
+        RectTransform nameInputRect = nameInputObj.GetComponent<RectTransform>();
+        nameInputRect.anchorMin = new Vector2(0.1f, 0.7f);
+        nameInputRect.anchorMax = new Vector2(0.9f, 0.85f);
+        nameInputRect.offsetMin = Vector2.zero;
+        nameInputRect.offsetMax = Vector2.zero;
+        
+        // Create text area for player name input field
+        GameObject nameTextArea = new GameObject("Text Area");
+        nameTextArea.transform.SetParent(nameInputObj.transform, false);
+        TMP_Text nameInputText = nameTextArea.AddComponent<TextMeshProUGUI>();
+        nameInputText.text = "";
+        nameInputText.color = Color.white;
+        nameInputText.fontSize = 18;
+        nameInputText.alignment = TextAlignmentOptions.Left;
+        RectTransform nameTextRect = nameTextArea.GetComponent<RectTransform>();
+        nameTextRect.anchorMin = new Vector2(0.05f, 0.1f);
+        nameTextRect.anchorMax = new Vector2(0.95f, 0.9f);
+        nameTextRect.offsetMin = Vector2.zero;
+        nameTextRect.offsetMax = Vector2.zero;
+        
+        // Create placeholder for player name input field
+        GameObject namePlaceholder = new GameObject("Placeholder");
+        namePlaceholder.transform.SetParent(nameInputObj.transform, false);
+        TMP_Text namePlaceholderText = namePlaceholder.AddComponent<TextMeshProUGUI>();
+        namePlaceholderText.text = "Enter Your Name";
+        namePlaceholderText.color = new Color(0.7f, 0.7f, 0.7f, 0.5f);
+        namePlaceholderText.fontSize = 18;
+        namePlaceholderText.alignment = TextAlignmentOptions.Left;
+        RectTransform namePlaceholderRect = namePlaceholder.GetComponent<RectTransform>();
+        namePlaceholderRect.anchorMin = new Vector2(0.05f, 0.1f);
+        namePlaceholderRect.anchorMax = new Vector2(0.95f, 0.9f);
+        namePlaceholderRect.offsetMin = Vector2.zero;
+        namePlaceholderRect.offsetMax = Vector2.zero;
+        
+        // Connect the player name input field components
+        _playerNameInput.textComponent = nameInputText;
+        _playerNameInput.placeholder = namePlaceholderText;
+        _playerNameInput.text = "Player" + UnityEngine.Random.Range(1000, 10000);
+
         // Add room name input
         GameObject inputObj = new GameObject("Room Name Input");
         inputObj.transform.SetParent(panelObj.transform, false);
@@ -65,12 +149,12 @@ public class UIManager : MonoBehaviour
         Image inputImage = inputObj.AddComponent<Image>();
         inputImage.color = new Color(0.2f, 0.2f, 0.2f, 1f);
         RectTransform inputRect = inputObj.GetComponent<RectTransform>();
-        inputRect.anchorMin = new Vector2(0.1f, 0.6f);
-        inputRect.anchorMax = new Vector2(0.9f, 0.75f);
+        inputRect.anchorMin = new Vector2(0.1f, 0.55f);
+        inputRect.anchorMax = new Vector2(0.9f, 0.7f);
         inputRect.offsetMin = Vector2.zero;
         inputRect.offsetMax = Vector2.zero;
         
-        // Create text area for input field
+        // Create text area for room input field
         GameObject textArea = new GameObject("Text Area");
         textArea.transform.SetParent(inputObj.transform, false);
         TMP_Text inputText = textArea.AddComponent<TextMeshProUGUI>();
@@ -84,7 +168,7 @@ public class UIManager : MonoBehaviour
         textRect.offsetMin = Vector2.zero;
         textRect.offsetMax = Vector2.zero;
         
-        // Create placeholder for input field
+        // Create placeholder for room input field
         GameObject placeholder = new GameObject("Placeholder");
         placeholder.transform.SetParent(inputObj.transform, false);
         TMP_Text placeholderText = placeholder.AddComponent<TextMeshProUGUI>();
@@ -98,10 +182,10 @@ public class UIManager : MonoBehaviour
         placeholderRect.offsetMin = Vector2.zero;
         placeholderRect.offsetMax = Vector2.zero;
         
-        // Connect the input field components
+        // Connect the room input field components
         _roomNameInput.textComponent = inputText;
         _roomNameInput.placeholder = placeholderText;
-        _roomNameInput.text = "Room" + UnityEngine.Random.Range(1000, 10000);
+        _roomNameInput.text = "asd"; // Default to "asd"
 
         // Add create room button
         GameObject createButtonObj = new GameObject("Create Room Button");
@@ -157,7 +241,7 @@ public class UIManager : MonoBehaviour
         GameObject statusObj = new GameObject("Status Text");
         statusObj.transform.SetParent(panelObj.transform, false);
         _statusText = statusObj.AddComponent<TextMeshProUGUI>();
-        _statusText.text = "Enter a room name and create or join a room";
+        _statusText.text = "Enter your name and a room name to create or join";
         _statusText.fontSize = 16;
         _statusText.alignment = TextAlignmentOptions.Center;
         _statusText.color = Color.white;
@@ -166,8 +250,241 @@ public class UIManager : MonoBehaviour
         statusRect.anchorMax = new Vector2(0.9f, 0.35f);
         statusRect.offsetMin = Vector2.zero;
         statusRect.offsetMax = Vector2.zero;
+    }
+    
+    private void CreateLobbyPanel(GameObject parentCanvas)
+    {
+        // Create lobby panel
+        GameObject lobbyPanelObj = new GameObject("Lobby Panel");
+        lobbyPanelObj.transform.SetParent(_uiCanvas.transform, false);
+        _lobbyPanel = lobbyPanelObj;
         
-        GameManager.Instance.LogManager.LogMessage("UI created successfully");
+        Image lobbyPanelImage = lobbyPanelObj.AddComponent<Image>();
+        lobbyPanelImage.color = new Color(0, 0, 0, 0.8f);
+        RectTransform lobbyPanelRect = lobbyPanelObj.GetComponent<RectTransform>();
+        lobbyPanelRect.anchorMin = new Vector2(0, 0);
+        lobbyPanelRect.anchorMax = new Vector2(0.3f, 1);
+        lobbyPanelRect.offsetMin = Vector2.zero;
+        lobbyPanelRect.offsetMax = Vector2.zero;
+        
+        // Add title text
+        GameObject lobbyTitleObj = new GameObject("Lobby Title");
+        lobbyTitleObj.transform.SetParent(lobbyPanelObj.transform, false);
+        TMP_Text lobbyTitleText = lobbyTitleObj.AddComponent<TextMeshProUGUI>();
+        lobbyTitleText.text = "Game Lobby";
+        lobbyTitleText.fontSize = 24;
+        lobbyTitleText.alignment = TextAlignmentOptions.Center;
+        lobbyTitleText.color = Color.white;
+        RectTransform lobbyTitleRect = lobbyTitleObj.GetComponent<RectTransform>();
+        lobbyTitleRect.anchorMin = new Vector2(0.1f, 0.9f);
+        lobbyTitleRect.anchorMax = new Vector2(0.9f, 1f);
+        lobbyTitleRect.offsetMin = Vector2.zero;
+        lobbyTitleRect.offsetMax = Vector2.zero;
+        
+        // Add room name display
+        GameObject roomNameObj = new GameObject("Room Name Text");
+        roomNameObj.transform.SetParent(lobbyPanelObj.transform, false);
+        TMP_Text roomNameText = roomNameObj.AddComponent<TextMeshProUGUI>();
+        roomNameText.text = "Room: asd";
+        roomNameText.fontSize = 18;
+        roomNameText.alignment = TextAlignmentOptions.Center;
+        roomNameText.color = Color.white;
+        RectTransform roomNameRect = roomNameObj.GetComponent<RectTransform>();
+        roomNameRect.anchorMin = new Vector2(0.1f, 0.85f);
+        roomNameRect.anchorMax = new Vector2(0.9f, 0.9f);
+        roomNameRect.offsetMin = Vector2.zero;
+        roomNameRect.offsetMax = Vector2.zero;
+        
+        // Add player list title
+        GameObject playerListTitleObj = new GameObject("Player List Title");
+        playerListTitleObj.transform.SetParent(lobbyPanelObj.transform, false);
+        TMP_Text playerListTitleText = playerListTitleObj.AddComponent<TextMeshProUGUI>();
+        playerListTitleText.text = "Players";
+        playerListTitleText.fontSize = 18;
+        playerListTitleText.alignment = TextAlignmentOptions.Center;
+        playerListTitleText.color = Color.white;
+        RectTransform playerListTitleRect = playerListTitleObj.GetComponent<RectTransform>();
+        playerListTitleRect.anchorMin = new Vector2(0.1f, 0.8f);
+        playerListTitleRect.anchorMax = new Vector2(0.9f, 0.85f);
+        playerListTitleRect.offsetMin = Vector2.zero;
+        playerListTitleRect.offsetMax = Vector2.zero;
+        
+        // Add player list scroll view
+        GameObject scrollViewObj = new GameObject("Player List Scroll View");
+        scrollViewObj.transform.SetParent(lobbyPanelObj.transform, false);
+        ScrollRect scrollRect = scrollViewObj.AddComponent<ScrollRect>();
+        Image scrollViewImage = scrollViewObj.AddComponent<Image>();
+        scrollViewImage.color = new Color(0.1f, 0.1f, 0.1f, 0.5f);
+        RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
+        scrollViewRect.anchorMin = new Vector2(0.05f, 0.3f);
+        scrollViewRect.anchorMax = new Vector2(0.95f, 0.8f);
+        scrollViewRect.offsetMin = Vector2.zero;
+        scrollViewRect.offsetMax = Vector2.zero;
+        
+        // Add viewport
+        GameObject viewportObj = new GameObject("Viewport");
+        viewportObj.transform.SetParent(scrollViewObj.transform, false);
+        Image viewportImage = viewportObj.AddComponent<Image>();
+        viewportImage.color = new Color(0.1f, 0.1f, 0.1f, 0.01f); // Almost transparent
+        RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
+        viewportRect.anchorMin = new Vector2(0, 0);
+        viewportRect.anchorMax = new Vector2(1, 1);
+        viewportRect.offsetMin = Vector2.zero;
+        viewportRect.offsetMax = Vector2.zero;
+        viewportObj.AddComponent<Mask>().showMaskGraphic = false;
+        
+        // Add content
+        GameObject contentObj = new GameObject("Content");
+        contentObj.transform.SetParent(viewportObj.transform, false);
+        _playerListContent = contentObj.transform;
+        VerticalLayoutGroup layoutGroup = contentObj.AddComponent<VerticalLayoutGroup>();
+        layoutGroup.spacing = 2f;
+        layoutGroup.padding = new RectOffset(5, 5, 5, 5);
+        ContentSizeFitter sizeFitter = contentObj.AddComponent<ContentSizeFitter>();
+        sizeFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        RectTransform contentRect = contentObj.GetComponent<RectTransform>();
+        contentRect.anchorMin = new Vector2(0, 1);
+        contentRect.anchorMax = new Vector2(1, 1);
+        contentRect.pivot = new Vector2(0.5f, 1);
+        contentRect.offsetMin = new Vector2(0, 0);
+        contentRect.offsetMax = new Vector2(0, 0);
+        
+        // Setup scroll rect
+        scrollRect.viewport = viewportRect;
+        scrollRect.content = contentRect;
+        scrollRect.horizontal = false;
+        scrollRect.scrollSensitivity = 10f;
+        
+        // Create player list item prefab
+        _playerListItemPrefab = CreatePlayerListItemPrefab();
+        
+        // Add ready button
+        GameObject readyButtonObj = new GameObject("Ready Button");
+        readyButtonObj.transform.SetParent(lobbyPanelObj.transform, false);
+        _readyButton = readyButtonObj.AddComponent<Button>();
+        Image readyButtonImage = readyButtonObj.AddComponent<Image>();
+        readyButtonImage.color = new Color(0.2f, 0.7f, 0.2f, 1f);
+        RectTransform readyButtonRect = readyButtonObj.GetComponent<RectTransform>();
+        readyButtonRect.anchorMin = new Vector2(0.1f, 0.2f);
+        readyButtonRect.anchorMax = new Vector2(0.9f, 0.25f);
+        readyButtonRect.offsetMin = Vector2.zero;
+        readyButtonRect.offsetMax = Vector2.zero;
+        
+        GameObject readyButtonText = new GameObject("Text");
+        readyButtonText.transform.SetParent(readyButtonObj.transform, false);
+        TMP_Text readyText = readyButtonText.AddComponent<TextMeshProUGUI>();
+        readyText.text = "Ready (or press R)";
+        readyText.fontSize = 18;
+        readyText.alignment = TextAlignmentOptions.Center;
+        readyText.color = Color.white;
+        RectTransform readyTextRect = readyButtonText.GetComponent<RectTransform>();
+        readyTextRect.anchorMin = Vector2.zero;
+        readyTextRect.anchorMax = Vector2.one;
+        readyTextRect.offsetMin = Vector2.zero;
+        readyTextRect.offsetMax = Vector2.zero;
+        
+        // Add countdown text
+        GameObject countdownObj = new GameObject("Countdown Text");
+        countdownObj.transform.SetParent(lobbyPanelObj.transform, false);
+        _countdownText = countdownObj.AddComponent<TextMeshProUGUI>();
+        _countdownText.text = "";
+        _countdownText.fontSize = 24;
+        _countdownText.alignment = TextAlignmentOptions.Center;
+        _countdownText.color = Color.yellow;
+        RectTransform countdownRect = countdownObj.GetComponent<RectTransform>();
+        countdownRect.anchorMin = new Vector2(0.1f, 0.1f);
+        countdownRect.anchorMax = new Vector2(0.9f, 0.2f);
+        countdownRect.offsetMin = Vector2.zero;
+        countdownRect.offsetMax = Vector2.zero;
+    }
+    
+    private void CreateDebugControls(GameObject parentCanvas)
+{
+    // Add a debug panel
+    GameObject debugControlsObj = new GameObject("Debug Controls");
+    debugControlsObj.transform.SetParent(_uiCanvas.transform, false);
+    
+    // Add a RectTransform component explicitly
+    RectTransform debugRect = debugControlsObj.AddComponent<RectTransform>();
+    debugRect.anchorMin = new Vector2(0.8f, 0.9f);
+    debugRect.anchorMax = new Vector2(1f, 1f);
+    debugRect.offsetMin = Vector2.zero;
+    debugRect.offsetMax = Vector2.zero;
+    
+    // Add a ready toggle button for debugging
+    GameObject debugReadyObj = new GameObject("Debug Ready Button");
+    debugReadyObj.transform.SetParent(debugControlsObj.transform, false);
+    _debugReadyButton = debugReadyObj.AddComponent<Button>();
+    Image debugReadyImage = debugReadyObj.AddComponent<Image>();
+    debugReadyImage.color = new Color(1f, 0f, 0f, 0.5f);
+    
+    RectTransform debugReadyRect = debugReadyObj.GetComponent<RectTransform>();
+    debugReadyRect.anchorMin = new Vector2(0f, 0f);
+    debugReadyRect.anchorMax = new Vector2(1f, 1f);
+    debugReadyRect.offsetMin = Vector2.zero;
+    debugReadyRect.offsetMax = Vector2.zero;
+    
+    GameObject debugReadyText = new GameObject("Text");
+    debugReadyText.transform.SetParent(debugReadyObj.transform, false);
+    TMP_Text readyText = debugReadyText.AddComponent<TextMeshProUGUI>();
+    readyText.text = "R";
+    readyText.fontSize = 20;
+    readyText.alignment = TextAlignmentOptions.Center;
+    readyText.color = Color.white;
+    
+    RectTransform debugTextRect = debugReadyText.GetComponent<RectTransform>();
+    debugTextRect.anchorMin = Vector2.zero;
+    debugTextRect.anchorMax = Vector2.one;
+    debugTextRect.offsetMin = Vector2.zero;
+    debugTextRect.offsetMax = Vector2.zero;
+}
+    
+    private GameObject CreatePlayerListItemPrefab()
+    {
+        GameObject itemObj = new GameObject("Player List Item");
+        itemObj.SetActive(false); // This is a prefab
+        
+        // Add background image
+        Image itemImage = itemObj.AddComponent<Image>();
+        itemImage.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
+        
+        // Set layout properties
+        RectTransform itemRect = itemObj.GetComponent<RectTransform>();
+        itemRect.sizeDelta = new Vector2(0, 30);
+        
+        // Add horizontal layout group
+        HorizontalLayoutGroup itemLayout = itemObj.AddComponent<HorizontalLayoutGroup>();
+        itemLayout.padding = new RectOffset(5, 5, 5, 5);
+        itemLayout.spacing = 5f;
+        itemLayout.childAlignment = TextAnchor.MiddleLeft;
+        
+        // Add player name text
+        GameObject nameTextObj = new GameObject("Player Name");
+        nameTextObj.transform.SetParent(itemObj.transform, false);
+        TMP_Text nameText = nameTextObj.AddComponent<TextMeshProUGUI>();
+        nameText.text = "Player Name";
+        nameText.fontSize = 14;
+        nameText.color = Color.white;
+        nameText.alignment = TextAlignmentOptions.Left;
+        
+        // Add layout element to name
+        LayoutElement nameLayout = nameTextObj.AddComponent<LayoutElement>();
+        nameLayout.flexibleWidth = 1;
+        
+        // Add ready status text
+        GameObject statusTextObj = new GameObject("Ready Status");
+        statusTextObj.transform.SetParent(itemObj.transform, false);
+        TMP_Text statusText = statusTextObj.AddComponent<TextMeshProUGUI>();
+        statusText.text = "Not Ready";
+        statusText.fontSize = 14;
+        statusText.color = Color.red;
+        statusText.alignment = TextAlignmentOptions.Right;
+        
+        // Add layout element to status
+        LayoutElement statusLayout = statusTextObj.AddComponent<LayoutElement>();
+        statusLayout.preferredWidth = 80;
+        
+        return itemObj;
     }
 
     private void SetupUIListeners()
@@ -176,6 +493,7 @@ public class UIManager : MonoBehaviour
         {
             _createRoomButton.onClick.RemoveAllListeners();
             _createRoomButton.onClick.AddListener(() => {
+                SaveLocalPlayerName();
                 GameManager.Instance.NetworkManager.CreateRoom(_roomNameInput.text);
             });
         }
@@ -184,11 +502,110 @@ public class UIManager : MonoBehaviour
         {
             _joinRoomButton.onClick.RemoveAllListeners();
             _joinRoomButton.onClick.AddListener(() => {
+                SaveLocalPlayerName();
                 GameManager.Instance.NetworkManager.JoinRoom(_roomNameInput.text);
             });
         }
         
+        if (_readyButton != null)
+        {
+            _readyButton.onClick.RemoveAllListeners();
+            _readyButton.onClick.AddListener(() => {
+                SetLocalPlayerReady();
+            });
+        }
+        
+        if (_debugReadyButton != null)
+        {
+            _debugReadyButton.onClick.RemoveAllListeners();
+            _debugReadyButton.onClick.AddListener(() => {
+                GameManager.Instance.LogManager.LogMessage("Debug ready button pressed - simulating R key press");
+                SetLocalPlayerReady();
+            });
+        }
+        
         GameManager.Instance.LogManager.LogMessage("UI listeners set up");
+    }
+    
+    private void SaveLocalPlayerName()
+    {
+        if (_playerNameInput != null)
+        {
+            _localPlayerName = _playerNameInput.text;
+            if (string.IsNullOrEmpty(_localPlayerName))
+            {
+                _localPlayerName = "Player" + UnityEngine.Random.Range(1000, 10000);
+            }
+            
+            GameManager.Instance.LogManager.LogMessage($"Saved local player name: {_localPlayerName}");
+        }
+    }
+    
+    private void SetLocalPlayerReady()
+    {
+        // Find local player object
+        Player localPlayer = FindLocalPlayer();
+        if (localPlayer != null)
+        {
+            // Toggle ready status
+            bool currentStatus = localPlayer.GetReadyStatus();
+            bool newStatus = !currentStatus;
+            localPlayer.SetReadyStatus(newStatus);
+            
+            GameManager.Instance.LogManager.LogMessage($"Local player ready status changed to: {newStatus}");
+            
+            // Update UI
+            Button button = _readyButton;
+            if (button != null)
+            {
+                if (newStatus)
+                {
+                    ColorBlock colors = button.colors;
+                    colors.normalColor = new Color(0.7f, 0.2f, 0.2f, 1f);
+                    button.colors = colors;
+                    
+                    TMP_Text buttonText = button.GetComponentInChildren<TMP_Text>();
+                    if (buttonText != null)
+                    {
+                        buttonText.text = "Cancel Ready";
+                    }
+                }
+                else
+                {
+                    ColorBlock colors = button.colors;
+                    colors.normalColor = new Color(0.2f, 0.7f, 0.2f, 1f);
+                    button.colors = colors;
+                    
+                    TMP_Text buttonText = button.GetComponentInChildren<TMP_Text>();
+                    if (buttonText != null)
+                    {
+                        buttonText.text = "Ready (or press R)";
+                    }
+                }
+            }
+            
+            // Update player list
+            UpdatePlayersList();
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogMessage("Could not find local player");
+        }
+    }
+    
+    private Player FindLocalPlayer()
+    {
+        var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
+        if (networkRunner != null)
+        {
+            var localPlayerRef = networkRunner.LocalPlayer;
+            var playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(localPlayerRef);
+            if (playerObject != null)
+            {
+                return playerObject.GetComponent<Player>();
+            }
+        }
+        return null;
     }
 
     // Implement common UI actions
@@ -196,12 +613,21 @@ public class UIManager : MonoBehaviour
     {
         if (_connectPanel != null)
             _connectPanel.SetActive(true);
+        
+        if (_lobbyPanel != null)
+            _lobbyPanel.SetActive(false);
     }
 
     public void HideConnectUI()
     {
         if (_connectPanel != null)
             _connectPanel.SetActive(false);
+        
+        if (_lobbyPanel != null)
+            _lobbyPanel.SetActive(true);
+        
+        // Update the room name in the lobby UI
+        UpdateRoomInfo();
     }
     
     public void UpdateStatus(string message)
@@ -210,5 +636,126 @@ public class UIManager : MonoBehaviour
         {
             _statusText.text = message;
         }
+    }
+    
+    private void UpdateRoomInfo()
+    {
+        var runner = GameManager.Instance.NetworkManager.GetRunner();
+        if (runner != null && runner.SessionInfo != null)
+        {
+            TMP_Text roomNameText = _lobbyPanel.transform.Find("Room Name Text")?.GetComponent<TMP_Text>();
+            if (roomNameText != null)
+            {
+                roomNameText.text = $"Room: {runner.SessionInfo.Name}";
+            }
+        }
+    }
+    
+    public void UpdatePlayersList()
+    {
+        if (_playerListContent == null)
+            return;
+            
+        GameManager.Instance.LogManager.LogMessage("Updating players list in UI");
+            
+        // Get all player names from LobbyManager
+        List<string> playerNames = GameManager.Instance.LobbyManager.GetAllPlayerNames();
+        
+        GameManager.Instance.LogManager.LogMessage($"Found {playerNames.Count} players in lobby manager");
+        
+        // Remove any players that are no longer in the lobby
+        List<string> playersToRemove = new List<string>();
+        foreach (var entry in _playerListItems)
+        {
+            if (!playerNames.Contains(entry.Key))
+            {
+                playersToRemove.Add(entry.Key);
+            }
+        }
+        
+        foreach (var playerName in playersToRemove)
+        {
+            Destroy(_playerListItems[playerName]);
+            _playerListItems.Remove(playerName);
+            GameManager.Instance.LogManager.LogMessage($"Removed {playerName} from UI list");
+        }
+        
+        // Add or update player items
+        foreach (var playerName in playerNames)
+        {
+            GameObject playerItem;
+            if (_playerListItems.ContainsKey(playerName))
+            {
+                playerItem = _playerListItems[playerName];
+                GameManager.Instance.LogManager.LogMessage($"Updating existing player item: {playerName}");
+            }
+            else
+            {
+                // Create a new player item
+                playerItem = Instantiate(_playerListItemPrefab, _playerListContent);
+                playerItem.SetActive(true);
+                _playerListItems.Add(playerName, playerItem);
+                GameManager.Instance.LogManager.LogMessage($"Created new player item: {playerName}");
+            }
+            
+            // Update player item UI
+            TMP_Text nameText = playerItem.transform.Find("Player Name")?.GetComponent<TMP_Text>();
+            TMP_Text statusText = playerItem.transform.Find("Ready Status")?.GetComponent<TMP_Text>();
+            
+            if (nameText != null)
+            {
+                nameText.text = playerName;
+            }
+            
+            if (statusText != null)
+            {
+                bool isReady = GameManager.Instance.LobbyManager.GetPlayerReadyStatus(playerName);
+                statusText.text = isReady ? "Ready" : "Not Ready";
+                statusText.color = isReady ? Color.green : Color.red;
+            }
+        }
+    }
+    
+    private void HandleAllPlayersReady()
+    {
+        if (_countdownText != null)
+        {
+            _countdownText.text = "All players ready! Game starting soon...";
+        }
+        
+        GameManager.Instance.LogManager.LogMessage("All players ready event received in UI");
+    }
+    
+    private void HandleCountdownComplete()
+    {
+        if (_countdownText != null)
+        {
+            _countdownText.text = "Game starting!";
+        }
+        
+        GameManager.Instance.LogManager.LogMessage("Countdown complete event received in UI");
+    }
+    
+    private void HandlePlayerReadyStatusChanged(string playerName, bool isReady)
+    {
+        UpdatePlayersList();
+        GameManager.Instance.LogManager.LogMessage($"Player ready status changed: {playerName} - {isReady}");
+    }
+    
+    private void Update()
+    {
+        if (GameManager.Instance.LobbyManager != null && GameManager.Instance.LobbyManager.IsCountdownActive())
+        {
+            if (_countdownText != null)
+            {
+                float countdown = GameManager.Instance.LobbyManager.GetCurrentCountdown();
+                _countdownText.text = $"Game starting in: {countdown:F1}";
+            }
+        }
+    }
+    
+    public string GetLocalPlayerName()
+    {
+        return _localPlayerName;
     }
 }

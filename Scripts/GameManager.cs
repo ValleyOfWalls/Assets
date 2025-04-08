@@ -11,6 +11,7 @@ public class GameManager : MonoBehaviour
     [HideInInspector] public LogManager LogManager { get; private set; }
     [HideInInspector] public PlayerManager PlayerManager { get; private set; }
     [HideInInspector] public CameraManager CameraManager { get; private set; }
+    [HideInInspector] public LobbyManager LobbyManager { get; private set; }
 
     private void Awake()
     {
@@ -30,6 +31,7 @@ public class GameManager : MonoBehaviour
         NetworkManager = gameObject.AddComponent<NetworkManager>();
         PlayerManager = gameObject.AddComponent<PlayerManager>();
         CameraManager = gameObject.AddComponent<CameraManager>();
+        LobbyManager = gameObject.AddComponent<LobbyManager>();
         UIManager = gameObject.AddComponent<UIManager>();
         
         // Log initial message
@@ -42,6 +44,7 @@ public class GameManager : MonoBehaviour
         NetworkManager.Initialize();
         PlayerManager.Initialize();
         CameraManager.Initialize();
+        LobbyManager.Initialize();
         UIManager.Initialize();
         
         // Log network configuration

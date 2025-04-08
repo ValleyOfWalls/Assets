@@ -35,10 +35,21 @@ public class PlayerManager : MonoBehaviour
                 return;
             }
             
+            // Get player name from UI
+            string playerName = "";
+            if (player == runner.LocalPlayer)
+            {
+                playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
+            }
+            
+            // Check if this player is rejoining
+            bool isRejoining = !string.IsNullOrEmpty(playerName) && 
+                               GameManager.Instance.NetworkManager.CheckIsRejoining(playerName);
+            
             // Position the player with a unique position based on player ID to avoid spawn collisions
             Vector3 spawnPosition = new Vector3(
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId, 
-                1, 
+                0, 
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId
             );
             
@@ -49,6 +60,28 @@ public class PlayerManager : MonoBehaviour
             if (playerObject != null)
             {
                 _players[player] = playerObject;
+                
+                // Initialize player name
+                Player playerComponent = playerObject.GetComponent<Player>();
+                if (playerComponent != null)
+                {
+                    if (player == runner.LocalPlayer)
+                    {
+                        playerComponent.SetPlayerName(playerName);
+                        
+                        if (isRejoining)
+                        {
+                            GameManager.Instance.LogManager.LogMessage($"Player {playerName} is rejoining the game");
+                            GameManager.Instance.UIManager.UpdateStatus($"Rejoined as {playerName}");
+                        }
+                        else
+                        {
+                            GameManager.Instance.LogManager.LogMessage($"Player {playerName} joined the game");
+                            GameManager.Instance.UIManager.UpdateStatus($"You joined as {playerName}");
+                        }
+                    }
+                }
+                
                 GameManager.Instance.LogManager.LogMessage($"Player {player} spawned successfully with object ID: {playerObject.Id}");
                 
                 // Only create camera for the local player
@@ -56,13 +89,14 @@ public class PlayerManager : MonoBehaviour
                 {
                     GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
                     GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
-                    GameManager.Instance.UIManager.UpdateStatus($"You joined as Player {player.PlayerId}");
                 }
                 else
                 {
                     GameManager.Instance.LogManager.LogMessage($"Remote player {player} joined");
-                    GameManager.Instance.UIManager.UpdateStatus($"Player {player.PlayerId} joined the game");
                 }
+                
+                // Update the lobby UI
+                GameManager.Instance.UIManager.UpdatePlayersList();
             }
             else
             {
@@ -82,22 +116,48 @@ public class PlayerManager : MonoBehaviour
     {
         GameManager.Instance.LogManager.LogMessage($"Player {player} left the game");
         
-        // Clean up the player
+        // Get player name before cleanup
+        string playerName = "";
         if (_players.TryGetValue(player, out NetworkObject playerObject))
         {
             if (playerObject != null)
             {
-                runner.Despawn(playerObject);
+                Player playerComponent = playerObject.GetComponent<Player>();
+                if (playerComponent != null)
+                {
+                    playerName = playerComponent.GetPlayerName();
+                }
+            }
+        }
+        
+        // Clean up the player object
+        if (_players.TryGetValue(player, out NetworkObject obj))
+        {
+            if (obj != null)
+            {
+                runner.Despawn(obj);
                 GameManager.Instance.LogManager.LogMessage($"Despawned player object for Player {player}");
             }
             _players.Remove(player);
         }
         
+        // Don't remove from lobby manager to allow rejoining
+        
         GameManager.Instance.LogManager.LogMessage($"Players remaining in session: {_players.Count}");
+        
+        // Update lobby UI
+        GameManager.Instance.UIManager.UpdatePlayersList();
         
         if (player != runner.LocalPlayer)
         {
-            GameManager.Instance.UIManager.UpdateStatus($"Player {player.PlayerId} left the game");
+            if (!string.IsNullOrEmpty(playerName))
+            {
+                GameManager.Instance.UIManager.UpdateStatus($"Player {playerName} left the game");
+            }
+            else
+            {
+                GameManager.Instance.UIManager.UpdateStatus($"Player {player.PlayerId} left the game");
+            }
         }
     }
     
@@ -105,6 +165,9 @@ public class PlayerManager : MonoBehaviour
     {
         _players.Clear();
         GameManager.Instance.LogManager.LogMessage("All players cleared");
+        
+        // Update UI
+        GameManager.Instance.UIManager.UpdatePlayersList();
     }
     
     public NetworkObject GetPlayerObject(PlayerRef player)
@@ -124,5 +187,18 @@ public class PlayerManager : MonoBehaviour
     public List<PlayerRef> GetAllPlayers()
     {
         return new List<PlayerRef>(_players.Keys);
+    }
+    
+    public Player GetPlayerByName(string playerName)
+    {
+        foreach (var playerObj in _players.Values)
+        {
+            Player player = playerObj.GetComponent<Player>();
+            if (player != null && player.GetPlayerName() == playerName)
+            {
+                return player;
+            }
+        }
+        return null;
     }
 }
