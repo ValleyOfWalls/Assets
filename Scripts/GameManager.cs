@@ -24,7 +24,7 @@ public class GameManager : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
         
-        // Initialize components
+        // Initialize components in the correct order
         LogManager = gameObject.AddComponent<LogManager>();
         LogManager.Initialize();
         
@@ -40,15 +40,32 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
-        // Initialize all managers
+        // Initialize all managers in the correct order
+        LogManager.LogMessage("Starting manager initialization...");
+        
+        // First initialize network and player managers
         NetworkManager.Initialize();
         PlayerManager.Initialize();
+        
+        // Then initialize camera and lobby managers
         CameraManager.Initialize();
         LobbyManager.Initialize();
+        
+        // Initialize UI last so it can subscribe to all events
         UIManager.Initialize();
         
         // Log network configuration
         NetworkManager.LogNetworkProjectConfig();
+        
+        // Log completion
+        LogManager.LogMessage("All managers initialized successfully");
+    }
+    
+    // Handle game state transitions
+    public void StartGame()
+    {
+        LogManager.LogMessage("Game is starting!");
+        // Game state setup will go here once implemented
     }
 
     private void OnDestroy()

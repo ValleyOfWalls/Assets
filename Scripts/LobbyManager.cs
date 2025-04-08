@@ -31,9 +31,14 @@ public class LobbyManager : NetworkBehaviour
     public event Action OnCountdownComplete;
     // Event raised when player ready status changes
     public event Action<string, bool> OnPlayerReadyStatusChanged;
+    // Event raised when the game actually starts
+    public event Action OnGameStarted;
     
     // Track if we've been spawned
     private bool _hasBeenSpawned = false;
+    
+    // For single player testing
+    private bool _singlePlayerDebugMode = true;
     
     public void Initialize()
     {
@@ -72,40 +77,55 @@ public class LobbyManager : NetworkBehaviour
             playerName = $"Player_{playerRef.PlayerId}";
         }
         
-        // Check for duplicate names and append a number if needed
-        string uniqueName = playerName;
-        int suffix = 1;
-        while (_playersByName.ContainsKey(uniqueName) && _playersByName[uniqueName] != playerRef)
+        // Log initial registration attempt
+        GameManager.Instance.LogManager.LogMessage($"Trying to register player {playerName} with ID {playerRef.PlayerId}");
+        
+        // Check for duplicate names
+        if (_playersByName.ContainsKey(playerName) && _playersByName[playerName] != playerRef)
         {
-            uniqueName = $"{playerName}_{suffix++}";
+            // Add player ID to make name unique
+            playerName = $"{playerName}_{playerRef.PlayerId}";
+            GameManager.Instance.LogManager.LogMessage($"Name already taken, using unique name: {playerName}");
         }
         
-        if (_playersByName.ContainsKey(uniqueName))
+        if (_playersByName.ContainsKey(playerName))
         {
-            // This is a rejoining player, we already have their ref
-            GameManager.Instance.LogManager.LogMessage($"Player {uniqueName} is rejoining");
+            // This is a rejoining player or duplicate register call
+            if (_playersByName[playerName] == playerRef)
+            {
+                GameManager.Instance.LogManager.LogMessage($"Player {playerName} is already registered with same PlayerRef");
+                return; // Already registered with same PlayerRef
+            }
             
             // Update the player reference (might have changed)
-            _playersByName[uniqueName] = playerRef;
+            GameManager.Instance.LogManager.LogMessage($"Player {playerName} is rejoining with new PlayerRef");
+            _playersByName[playerName] = playerRef;
             
             // Make sure to restore ready status
-            if (!_readyStatusByName.ContainsKey(uniqueName))
+            if (!_readyStatusByName.ContainsKey(playerName))
             {
-                _readyStatusByName.Add(uniqueName, false);
+                _readyStatusByName.Add(playerName, false);
             }
         }
         else
         {
             // New player joining
-            GameManager.Instance.LogManager.LogMessage($"Registering player {uniqueName} with ID {playerRef.PlayerId}");
-            _playersByName.Add(uniqueName, playerRef);
-            _readyStatusByName.Add(uniqueName, false);
+            GameManager.Instance.LogManager.LogMessage($"Registering new player {playerName} with ID {playerRef.PlayerId}");
+            _playersByName.Add(playerName, playerRef);
+            _readyStatusByName.Add(playerName, false);
             
             // Initialize player data for possible rejoin later
-            if (!_playerDataByName.ContainsKey(uniqueName))
+            if (!_playerDataByName.ContainsKey(playerName))
             {
-                _playerDataByName.Add(uniqueName, new PlayerData());
+                _playerDataByName.Add(playerName, new PlayerData());
             }
+        }
+        
+        // Debug output of all registered players
+        GameManager.Instance.LogManager.LogMessage($"Current player count: {_playersByName.Count}");
+        foreach (var name in _playersByName.Keys)
+        {
+            GameManager.Instance.LogManager.LogMessage($"  - Player: {name}, ID: {_playersByName[name].PlayerId}");
         }
         
         // Update UI
@@ -115,6 +135,11 @@ public class LobbyManager : NetworkBehaviour
     public bool IsPlayerRegistered(string playerName)
     {
         return _playersByName.ContainsKey(playerName);
+    }
+    
+    public bool CheckIsRejoining(string playerName)
+    {
+        return _playerDataByName.ContainsKey(playerName);
     }
     
     public void RemovePlayer(string playerName)
@@ -134,6 +159,8 @@ public class LobbyManager : NetworkBehaviour
     
     public void SetPlayerReadyStatus(string playerName, bool isReady)
     {
+        GameManager.Instance.LogManager.LogMessage($"Setting ready status for {playerName}: {isReady}");
+        
         if (_readyStatusByName.ContainsKey(playerName))
         {
             _readyStatusByName[playerName] = isReady;
@@ -145,10 +172,25 @@ public class LobbyManager : NetworkBehaviour
             // Check if all players are ready
             CheckAllPlayersReady();
         }
+        else if (!string.IsNullOrEmpty(playerName))
+        {
+            // Add the player to ready status if not there
+            _readyStatusByName.Add(playerName, isReady);
+            GameManager.Instance.LogManager.LogMessage($"Added new player {playerName} with ready status: {isReady}");
+            
+            // Notify listeners
+            OnPlayerReadyStatusChanged?.Invoke(playerName, isReady);
+            
+            // Check if all players are ready
+            CheckAllPlayersReady();
+        }
         else
         {
-            GameManager.Instance.LogManager.LogError($"Player {playerName} not found in ready status dictionary");
+            GameManager.Instance.LogManager.LogError("Attempted to set ready status for a null or empty player name");
         }
+        
+        // Update UI for all clients
+        GameManager.Instance.UIManager.UpdatePlayersList();
     }
     
     public bool GetPlayerReadyStatus(string playerName)
@@ -205,13 +247,33 @@ public class LobbyManager : NetworkBehaviour
         }
     }
     
+    // Special method for single player testing
+    public void DebugForceReadyCheck()
+    {
+        if (_singlePlayerDebugMode && _playersByName.Count == 1)
+        {
+            GameManager.Instance.LogManager.LogMessage("DEBUG: Forcing all players ready in single player mode");
+            
+            // Force notify listeners
+            OnAllPlayersReady?.Invoke();
+            
+            // Start countdown
+            StartCountdown();
+        }
+    }
+    
     public void StartCountdown()
     {
+        GameManager.Instance.LogManager.LogMessage("StartCountdown called");
+        
         // Use local variables if not spawned yet
         if (!_hasBeenSpawned)
         {
             if (_localCountdownActive)
+            {
+                GameManager.Instance.LogManager.LogMessage("Countdown already active (local)");
                 return;
+            }
                 
             _localCountdownActive = true;
             _localCurrentCountdown = _localCountdownTime;
@@ -222,7 +284,10 @@ public class LobbyManager : NetworkBehaviour
         
         // Use networked variables if spawned
         if (_countdownActive)
+        {
+            GameManager.Instance.LogManager.LogMessage("Countdown already active (networked)");
             return;
+        }
             
         if (HasStateAuthority)
         {
@@ -253,6 +318,9 @@ public class LobbyManager : NetworkBehaviour
                     
                     // Notify listeners that countdown is complete
                     OnCountdownComplete?.Invoke();
+                    
+                    // Start the game after a short delay
+                    StartGame();
                 }
             }
         }
@@ -273,8 +341,24 @@ public class LobbyManager : NetworkBehaviour
                 
                 GameManager.Instance.LogManager.LogMessage("Local countdown complete!");
                 OnCountdownComplete?.Invoke();
+                
+                // Start the game after a short delay
+                StartGame();
             }
         }
+    }
+    
+    private void StartGame()
+    {
+        if (!IsGameStarted())
+            return;
+            
+        // Trigger the game started event
+        GameManager.Instance.LogManager.LogMessage("GAME STARTING NOW!");
+        OnGameStarted?.Invoke();
+        
+        // For now, we just signal that the game has started
+        // Gameplay implementation will be added later
     }
     
     public float GetCurrentCountdown()
@@ -303,6 +387,11 @@ public class LobbyManager : NetworkBehaviour
     
     public List<string> GetAllPlayerNames()
     {
+        GameManager.Instance.LogManager.LogMessage($"GetAllPlayerNames called, found {_playersByName.Count} players");
+        foreach (var name in _playersByName.Keys)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Player in list: {name}");
+        }
         return new List<string>(_playersByName.Keys);
     }
     

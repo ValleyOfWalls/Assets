@@ -205,15 +205,21 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         GameManager.Instance.LogManager.LogMessage(playerCountMessage);
         
         // Call player manager to handle the new player
-        GameManager.Instance.PlayerManager.OnPlayerJoined(runner, player);
+        if (player == runner.LocalPlayer)
+        {
+            // Only spawn our own player object
+            GameManager.Instance.PlayerManager.OnLocalPlayerJoined(runner, player);
+        }
+        else
+        {
+            // Just track remote players
+            GameManager.Instance.PlayerManager.OnRemotePlayerJoined(runner, player);
+        }
     }
 
     public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
     {
         GameManager.Instance.LogManager.LogMessage($"Player {player} left the network");
-        
-        // Get player name before removing
-        string playerName = GameManager.Instance.LobbyManager.GetPlayerName(player);
         
         // Update player manager
         GameManager.Instance.PlayerManager.OnPlayerLeft(runner, player);
@@ -221,14 +227,6 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         // Update all clients about the player count
         string playerCountMessage = $"Players in room: {runner.ActivePlayers.Count()}";
         GameManager.Instance.LogManager.LogMessage(playerCountMessage);
-        
-        // Update lobby (don't remove data to allow rejoining)
-        if (!string.IsNullOrEmpty(playerName))
-        {
-            // We don't remove the player from LobbyManager to allow for rejoin
-            // But we do need to update the UI
-            GameManager.Instance.UIManager.UpdatePlayersList();
-        }
     }
 
     public void OnInput(NetworkRunner runner, NetworkInput input)

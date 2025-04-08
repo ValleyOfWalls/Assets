@@ -21,6 +21,10 @@ public class UIManager : MonoBehaviour
     private Transform _playerListContent;
     private GameObject _playerListItemPrefab;
     
+    // Game started UI
+    private GameObject _gameStartedPanel;
+    private TMP_Text _gameStartedText;
+    
     // Player name tracking
     private string _localPlayerName = "";
     
@@ -30,6 +34,9 @@ public class UIManager : MonoBehaviour
     // Debug controls
     private Button _debugReadyButton;
     
+    // Debug placeholders - delete after testing
+    private GameObject _debugPlayerListItem;
+    
     public void Initialize()
     {
         GameManager.Instance.LogManager.LogMessage("Initializing UIManager...");
@@ -38,10 +45,16 @@ public class UIManager : MonoBehaviour
         CreateUI();
         SetupUIListeners();
         
+        // Create a temporary player list item for testing
+        CreateDebugPlayerItem();
+        
         // Subscribe to LobbyManager events
         GameManager.Instance.LobbyManager.OnAllPlayersReady += HandleAllPlayersReady;
         GameManager.Instance.LobbyManager.OnCountdownComplete += HandleCountdownComplete;
         GameManager.Instance.LobbyManager.OnPlayerReadyStatusChanged += HandlePlayerReadyStatusChanged;
+        GameManager.Instance.LobbyManager.OnGameStarted += HandleGameStarted;
+        
+        GameManager.Instance.LogManager.LogMessage("UIManager initialization complete");
     }
     
     private void CreateUI()
@@ -60,11 +73,15 @@ public class UIManager : MonoBehaviour
         // Create a panel for lobby UI
         CreateLobbyPanel(canvasObj);
         
+        // Create a panel for game started UI
+        CreateGameStartedPanel(canvasObj);
+        
         // Create debug controls for testing
         CreateDebugControls(canvasObj);
         
-        // Hide lobby panel initially
+        // Hide lobby panel and game started panel initially
         _lobbyPanel.SetActive(false);
+        _gameStartedPanel.SetActive(false);
         
         GameManager.Instance.LogManager.LogMessage("UI created successfully");
     }
@@ -309,51 +326,33 @@ public class UIManager : MonoBehaviour
         playerListTitleRect.offsetMin = Vector2.zero;
         playerListTitleRect.offsetMax = Vector2.zero;
         
-        // Add player list scroll view
-        GameObject scrollViewObj = new GameObject("Player List Scroll View");
-        scrollViewObj.transform.SetParent(lobbyPanelObj.transform, false);
-        ScrollRect scrollRect = scrollViewObj.AddComponent<ScrollRect>();
-        Image scrollViewImage = scrollViewObj.AddComponent<Image>();
-        scrollViewImage.color = new Color(0.1f, 0.1f, 0.1f, 0.5f);
-        RectTransform scrollViewRect = scrollViewObj.GetComponent<RectTransform>();
-        scrollViewRect.anchorMin = new Vector2(0.05f, 0.3f);
-        scrollViewRect.anchorMax = new Vector2(0.95f, 0.8f);
-        scrollViewRect.offsetMin = Vector2.zero;
-        scrollViewRect.offsetMax = Vector2.zero;
+        // Add simple player list - DIRECT METHOD since ScrollRect is having issues
+        GameObject playerListObj = new GameObject("Player List");
+        playerListObj.transform.SetParent(lobbyPanelObj.transform, false);
         
-        // Add viewport
-        GameObject viewportObj = new GameObject("Viewport");
-        viewportObj.transform.SetParent(scrollViewObj.transform, false);
-        Image viewportImage = viewportObj.AddComponent<Image>();
-        viewportImage.color = new Color(0.1f, 0.1f, 0.1f, 0.01f); // Almost transparent
-        RectTransform viewportRect = viewportObj.GetComponent<RectTransform>();
-        viewportRect.anchorMin = new Vector2(0, 0);
-        viewportRect.anchorMax = new Vector2(1, 1);
-        viewportRect.offsetMin = Vector2.zero;
-        viewportRect.offsetMax = Vector2.zero;
-        viewportObj.AddComponent<Mask>().showMaskGraphic = false;
+        RectTransform playerListRect = playerListObj.AddComponent<RectTransform>();
+        playerListRect.anchorMin = new Vector2(0.05f, 0.3f);
+        playerListRect.anchorMax = new Vector2(0.95f, 0.8f);
+        playerListRect.offsetMin = Vector2.zero;
+        playerListRect.offsetMax = Vector2.zero;
         
-        // Add content
-        GameObject contentObj = new GameObject("Content");
-        contentObj.transform.SetParent(viewportObj.transform, false);
-        _playerListContent = contentObj.transform;
-        VerticalLayoutGroup layoutGroup = contentObj.AddComponent<VerticalLayoutGroup>();
-        layoutGroup.spacing = 2f;
-        layoutGroup.padding = new RectOffset(5, 5, 5, 5);
-        ContentSizeFitter sizeFitter = contentObj.AddComponent<ContentSizeFitter>();
-        sizeFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-        RectTransform contentRect = contentObj.GetComponent<RectTransform>();
-        contentRect.anchorMin = new Vector2(0, 1);
+        // Create content parent - this will hold our player items
+        GameObject playerListContentObj = new GameObject("Player List Content");
+        playerListContentObj.transform.SetParent(playerListObj.transform, false);
+        
+        // Add vertical layout group
+        VerticalLayoutGroup verticalLayout = playerListContentObj.AddComponent<VerticalLayoutGroup>();
+        verticalLayout.spacing = 5f;
+        verticalLayout.padding = new RectOffset(5, 5, 5, 5);
+        
+        // Get reference to player list content
+        _playerListContent = playerListContentObj.transform;
+        
+        RectTransform contentRect = playerListContentObj.GetComponent<RectTransform>();
+        contentRect.anchorMin = new Vector2(0, 0);
         contentRect.anchorMax = new Vector2(1, 1);
-        contentRect.pivot = new Vector2(0.5f, 1);
-        contentRect.offsetMin = new Vector2(0, 0);
-        contentRect.offsetMax = new Vector2(0, 0);
-        
-        // Setup scroll rect
-        scrollRect.viewport = viewportRect;
-        scrollRect.content = contentRect;
-        scrollRect.horizontal = false;
-        scrollRect.scrollSensitivity = 10f;
+        contentRect.offsetMin = Vector2.zero;
+        contentRect.offsetMax = Vector2.zero;
         
         // Create player list item prefab
         _playerListItemPrefab = CreatePlayerListItemPrefab();
@@ -396,48 +395,80 @@ public class UIManager : MonoBehaviour
         countdownRect.anchorMax = new Vector2(0.9f, 0.2f);
         countdownRect.offsetMin = Vector2.zero;
         countdownRect.offsetMax = Vector2.zero;
+        
+        GameManager.Instance.LogManager.LogMessage($"Player list content created: {_playerListContent != null}");
+    }
+    
+    private void CreateGameStartedPanel(GameObject parentCanvas)
+    {
+        // Create game started panel that overlays the center of the screen
+        GameObject gameStartedPanelObj = new GameObject("Game Started Panel");
+        gameStartedPanelObj.transform.SetParent(_uiCanvas.transform, false);
+        _gameStartedPanel = gameStartedPanelObj;
+        
+        Image gameStartedPanelImage = gameStartedPanelObj.AddComponent<Image>();
+        gameStartedPanelImage.color = new Color(0, 0, 0, 0.9f);
+        RectTransform gameStartedPanelRect = gameStartedPanelObj.GetComponent<RectTransform>();
+        gameStartedPanelRect.anchorMin = new Vector2(0.35f, 0.4f);
+        gameStartedPanelRect.anchorMax = new Vector2(0.65f, 0.6f);
+        gameStartedPanelRect.offsetMin = Vector2.zero;
+        gameStartedPanelRect.offsetMax = Vector2.zero;
+        
+        // Add game started text
+        GameObject gameStartedTextObj = new GameObject("Game Started Text");
+        gameStartedTextObj.transform.SetParent(gameStartedPanelObj.transform, false);
+        _gameStartedText = gameStartedTextObj.AddComponent<TextMeshProUGUI>();
+        _gameStartedText.text = "GAME STARTED!";
+        _gameStartedText.fontSize = 32;
+        _gameStartedText.alignment = TextAlignmentOptions.Center;
+        _gameStartedText.color = Color.green;
+        RectTransform gameStartedTextRect = gameStartedTextObj.GetComponent<RectTransform>();
+        gameStartedTextRect.anchorMin = Vector2.zero;
+        gameStartedTextRect.anchorMax = Vector2.one;
+        gameStartedTextRect.offsetMin = Vector2.zero;
+        gameStartedTextRect.offsetMax = Vector2.zero;
     }
     
     private void CreateDebugControls(GameObject parentCanvas)
-{
-    // Add a debug panel
-    GameObject debugControlsObj = new GameObject("Debug Controls");
-    debugControlsObj.transform.SetParent(_uiCanvas.transform, false);
-    
-    // Add a RectTransform component explicitly
-    RectTransform debugRect = debugControlsObj.AddComponent<RectTransform>();
-    debugRect.anchorMin = new Vector2(0.8f, 0.9f);
-    debugRect.anchorMax = new Vector2(1f, 1f);
-    debugRect.offsetMin = Vector2.zero;
-    debugRect.offsetMax = Vector2.zero;
-    
-    // Add a ready toggle button for debugging
-    GameObject debugReadyObj = new GameObject("Debug Ready Button");
-    debugReadyObj.transform.SetParent(debugControlsObj.transform, false);
-    _debugReadyButton = debugReadyObj.AddComponent<Button>();
-    Image debugReadyImage = debugReadyObj.AddComponent<Image>();
-    debugReadyImage.color = new Color(1f, 0f, 0f, 0.5f);
-    
-    RectTransform debugReadyRect = debugReadyObj.GetComponent<RectTransform>();
-    debugReadyRect.anchorMin = new Vector2(0f, 0f);
-    debugReadyRect.anchorMax = new Vector2(1f, 1f);
-    debugReadyRect.offsetMin = Vector2.zero;
-    debugReadyRect.offsetMax = Vector2.zero;
-    
-    GameObject debugReadyText = new GameObject("Text");
-    debugReadyText.transform.SetParent(debugReadyObj.transform, false);
-    TMP_Text readyText = debugReadyText.AddComponent<TextMeshProUGUI>();
-    readyText.text = "R";
-    readyText.fontSize = 20;
-    readyText.alignment = TextAlignmentOptions.Center;
-    readyText.color = Color.white;
-    
-    RectTransform debugTextRect = debugReadyText.GetComponent<RectTransform>();
-    debugTextRect.anchorMin = Vector2.zero;
-    debugTextRect.anchorMax = Vector2.one;
-    debugTextRect.offsetMin = Vector2.zero;
-    debugTextRect.offsetMax = Vector2.zero;
-}
+    {
+        // Add a debug panel
+        GameObject debugControlsObj = new GameObject("Debug Controls");
+        debugControlsObj.transform.SetParent(_uiCanvas.transform, false);
+        
+        // Add a RectTransform component explicitly
+        RectTransform debugRect = debugControlsObj.AddComponent<RectTransform>();
+        debugRect.anchorMin = new Vector2(0.8f, 0.9f);
+        debugRect.anchorMax = new Vector2(1f, 1f);
+        debugRect.offsetMin = Vector2.zero;
+        debugRect.offsetMax = Vector2.zero;
+        
+        // Add a ready toggle button for debugging
+        GameObject debugReadyObj = new GameObject("Debug Ready Button");
+        debugReadyObj.transform.SetParent(debugControlsObj.transform, false);
+        _debugReadyButton = debugReadyObj.AddComponent<Button>();
+        Image debugReadyImage = debugReadyObj.AddComponent<Image>();
+        debugReadyImage.color = new Color(1f, 0f, 0f, 0.5f);
+        
+        RectTransform debugReadyRect = debugReadyObj.GetComponent<RectTransform>();
+        debugReadyRect.anchorMin = new Vector2(0f, 0f);
+        debugReadyRect.anchorMax = new Vector2(1f, 1f);
+        debugReadyRect.offsetMin = Vector2.zero;
+        debugReadyRect.offsetMax = Vector2.zero;
+        
+        GameObject debugReadyText = new GameObject("Text");
+        debugReadyText.transform.SetParent(debugReadyObj.transform, false);
+        TMP_Text readyText = debugReadyText.AddComponent<TextMeshProUGUI>();
+        readyText.text = "R";
+        readyText.fontSize = 20;
+        readyText.alignment = TextAlignmentOptions.Center;
+        readyText.color = Color.white;
+        
+        RectTransform debugTextRect = debugReadyText.GetComponent<RectTransform>();
+        debugTextRect.anchorMin = Vector2.zero;
+        debugTextRect.anchorMax = Vector2.one;
+        debugTextRect.offsetMin = Vector2.zero;
+        debugTextRect.offsetMax = Vector2.zero;
+    }
     
     private GameObject CreatePlayerListItemPrefab()
     {
@@ -485,6 +516,29 @@ public class UIManager : MonoBehaviour
         statusLayout.preferredWidth = 80;
         
         return itemObj;
+    }
+    
+    // Create a debug player list item to verify UI is working
+    private void CreateDebugPlayerItem()
+    {
+        if (_playerListContent == null)
+        {
+            GameManager.Instance.LogManager.LogError("Player list content is still null when trying to create debug item");
+            return;
+        }
+        
+        // Create a debug player list item
+        _debugPlayerListItem = Instantiate(_playerListItemPrefab, _playerListContent);
+        _debugPlayerListItem.SetActive(true);
+        
+        // Set debug text
+        TMP_Text nameText = _debugPlayerListItem.transform.Find("Player Name")?.GetComponent<TMP_Text>();
+        if (nameText != null)
+        {
+            nameText.text = "DEBUG PLAYER";
+        }
+        
+        GameManager.Instance.LogManager.LogMessage("Created debug player list item");
     }
 
     private void SetupUIListeners()
@@ -552,6 +606,9 @@ public class UIManager : MonoBehaviour
             bool newStatus = !currentStatus;
             localPlayer.SetReadyStatus(newStatus);
             
+            // Direct call to LobbyManager to ensure ready status is set
+            GameManager.Instance.LobbyManager.SetPlayerReadyStatus(localPlayer.GetPlayerName(), newStatus);
+            
             GameManager.Instance.LogManager.LogMessage($"Local player ready status changed to: {newStatus}");
             
             // Update UI
@@ -586,6 +643,13 @@ public class UIManager : MonoBehaviour
             
             // Update player list
             UpdatePlayersList();
+            
+            // Force ready status check - only for single player testing
+            if (GameManager.Instance.PlayerManager.GetPlayerCount() == 1)
+            {
+                GameManager.Instance.LogManager.LogMessage("Single player detected - directly triggering player ready check");
+                GameManager.Instance.LobbyManager.DebugForceReadyCheck();
+            }
         }
         else
         {
@@ -616,6 +680,9 @@ public class UIManager : MonoBehaviour
         
         if (_lobbyPanel != null)
             _lobbyPanel.SetActive(false);
+            
+        if (_gameStartedPanel != null)
+            _gameStartedPanel.SetActive(false);
     }
 
     public void HideConnectUI()
@@ -625,6 +692,9 @@ public class UIManager : MonoBehaviour
         
         if (_lobbyPanel != null)
             _lobbyPanel.SetActive(true);
+            
+        if (_gameStartedPanel != null)
+            _gameStartedPanel.SetActive(false);
         
         // Update the room name in the lobby UI
         UpdateRoomInfo();
@@ -654,7 +724,10 @@ public class UIManager : MonoBehaviour
     public void UpdatePlayersList()
     {
         if (_playerListContent == null)
+        {
+            GameManager.Instance.LogManager.LogError("Player list content is null!");
             return;
+        }
             
         GameManager.Instance.LogManager.LogMessage("Updating players list in UI");
             
@@ -675,7 +748,10 @@ public class UIManager : MonoBehaviour
         
         foreach (var playerName in playersToRemove)
         {
-            Destroy(_playerListItems[playerName]);
+            if (_playerListItems[playerName] != null)
+            {
+                Destroy(_playerListItems[playerName]);
+            }
             _playerListItems.Remove(playerName);
             GameManager.Instance.LogManager.LogMessage($"Removed {playerName} from UI list");
         }
@@ -687,6 +763,13 @@ public class UIManager : MonoBehaviour
             if (_playerListItems.ContainsKey(playerName))
             {
                 playerItem = _playerListItems[playerName];
+                if (playerItem == null)
+                {
+                    // Item was destroyed, recreate it
+                    playerItem = Instantiate(_playerListItemPrefab, _playerListContent);
+                    playerItem.SetActive(true);
+                    _playerListItems[playerName] = playerItem;
+                }
                 GameManager.Instance.LogManager.LogMessage($"Updating existing player item: {playerName}");
             }
             else
@@ -734,6 +817,28 @@ public class UIManager : MonoBehaviour
         }
         
         GameManager.Instance.LogManager.LogMessage("Countdown complete event received in UI");
+    }
+    
+    private void HandleGameStarted()
+    {
+        GameManager.Instance.LogManager.LogMessage("Game started event received in UI");
+        
+        // Show the game started panel
+        if (_gameStartedPanel != null)
+        {
+            _gameStartedPanel.SetActive(true);
+            
+            // Hide the game started panel after 3 seconds
+            Invoke("HideGameStartedPanel", 3f);
+        }
+    }
+    
+    private void HideGameStartedPanel()
+    {
+        if (_gameStartedPanel != null)
+        {
+            _gameStartedPanel.SetActive(false);
+        }
     }
     
     private void HandlePlayerReadyStatusChanged(string playerName, bool isReady)

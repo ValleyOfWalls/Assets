@@ -8,35 +8,24 @@ public class Player : NetworkBehaviour
     [Networked] public NetworkString<_32> PlayerName { get; set; }
     [Networked] public NetworkBool IsReady { get; set; }
     
+    // Visual components - references only, created programmatically
+    private SpriteRenderer _spriteRenderer;
+    private TextMeshPro _nameText;
+    private CharacterController _characterController;
+    
     // Movement speed
     private float _moveSpeed = 5f;
-    
-    // Visual components
-    public SpriteRenderer _spriteRenderer;
-    public TextMeshPro _nameText;
-    
-    // Movement handling
-    private Vector2 _moveDirection;
-    private CharacterController _characterController;
     
     // Screen position management
     private Vector2 _screenBounds;
     
+    // Track if components were created
+    private bool _componentsCreated = false;
+
     private void Awake()
     {
-        // Find components if not already set
-        if (_spriteRenderer == null)
-            _spriteRenderer = GetComponentInChildren<SpriteRenderer>();
-            
-        if (_nameText == null)
-            _nameText = GetComponentInChildren<TextMeshPro>();
-            
-        // Use existing CharacterController instead of trying to add Rigidbody2D
-        _characterController = GetComponent<CharacterController>();
-        if (_characterController == null)
-        {
-            Debug.LogError("CharacterController component missing from player prefab!");
-        }
+        // Create components immediately when the object is instantiated
+        CreateAllComponents();
         
         // Calculate screen bounds
         Camera mainCamera = Camera.main;
@@ -48,31 +37,131 @@ public class Player : NetworkBehaviour
         }
     }
 
+    // Create all required components
+    private void CreateAllComponents()
+    {
+        if (_componentsCreated)
+            return;
+
+        GameManager.Instance.LogManager.LogMessage($"Creating components for player gameObject: {gameObject.name}");
+        
+        // Create CharacterController
+        CreateCharacterController();
+        
+        // Create visuals
+        CreateVisualComponents();
+        
+        _componentsCreated = true;
+        GameManager.Instance.LogManager.LogMessage("All components created for player");
+    }
+    
+    private void CreateCharacterController()
+    {
+        // Check if character controller exists
+        _characterController = GetComponent<CharacterController>();
+        if (_characterController == null)
+        {
+            // Add character controller
+            _characterController = gameObject.AddComponent<CharacterController>();
+            _characterController.radius = 0.5f;
+            _characterController.height = 2f;
+            _characterController.center = new Vector3(0, 1f, 0);
+            GameManager.Instance.LogManager.LogMessage("Created CharacterController for player");
+        }
+    }
+    
+    private void CreateVisualComponents()
+    {
+        // Create sprite
+        CreateSpriteRenderer();
+        
+        // Create name text
+        CreateNameText();
+    }
+    
+    private void CreateSpriteRenderer()
+    {
+        // Check for existing sprite renderer on children
+        _spriteRenderer = GetComponentInChildren<SpriteRenderer>();
+        if (_spriteRenderer == null)
+        {
+            // Create a child object for the sprite
+            GameObject spriteObj = new GameObject("PlayerSprite");
+            spriteObj.transform.SetParent(transform, false);
+            spriteObj.transform.localPosition = new Vector3(0, 0, 0);
+            
+            // Add sprite renderer
+            _spriteRenderer = spriteObj.AddComponent<SpriteRenderer>();
+            _spriteRenderer.sprite = CreateDefaultSprite();
+            _spriteRenderer.sortingOrder = 1;
+            
+            GameManager.Instance.LogManager.LogMessage("Created sprite renderer for player");
+        }
+    }
+    
+    private void CreateNameText()
+    {
+        // Check for existing name text on children
+        _nameText = GetComponentInChildren<TextMeshPro>();
+        if (_nameText == null)
+        {
+            // Create a child object for the text
+            GameObject textObj = new GameObject("PlayerNameText");
+            textObj.transform.SetParent(transform, false);
+            textObj.transform.localPosition = new Vector3(0, 1.5f, 0);
+            
+            // Add text mesh pro component
+            _nameText = textObj.AddComponent<TextMeshPro>();
+            _nameText.fontSize = 4;
+            _nameText.alignment = TextAlignmentOptions.Center;
+            _nameText.color = Color.white;
+            _nameText.text = "Player";
+            
+            // Make text face the camera
+            textObj.transform.rotation = Quaternion.Euler(90, 0, 0);
+            
+            GameManager.Instance.LogManager.LogMessage("Created text mesh for player name");
+        }
+    }
+    
+    private Sprite CreateDefaultSprite()
+    {
+        // Create a default circle sprite
+        Texture2D texture = new Texture2D(128, 128);
+        Color[] colors = new Color[128 * 128];
+        
+        for (int y = 0; y < 128; y++)
+        {
+            for (int x = 0; x < 128; x++)
+            {
+                float dx = x - 64;
+                float dy = y - 64;
+                float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                
+                if (dist < 60)
+                    colors[y * 128 + x] = Color.white;
+                else
+                    colors[y * 128 + x] = Color.clear;
+            }
+        }
+        
+        texture.SetPixels(colors);
+        texture.Apply();
+        
+        return Sprite.Create(texture, new Rect(0, 0, 128, 128), new Vector2(0.5f, 0.5f));
+    }
+
     public override void Spawned()
     {
         base.Spawned();
         
-        // Initialize sprite renderer if not assigned
-        if (_spriteRenderer == null)
-        {
-            _spriteRenderer = GetComponentInChildren<SpriteRenderer>();
-        }
+        GameManager.Instance.LogManager.LogMessage($"Player Spawned: HasStateAuthority={HasStateAuthority}, HasInputAuthority={HasInputAuthority}, ID={Object.Id}, InputAuthority={Object.InputAuthority}");
         
-        // Get the local player name from UI if this is the local player
-        if (HasInputAuthority && string.IsNullOrEmpty(PlayerName.ToString()))
+        // Double-check components were created (they should have been in Awake)
+        if (!_componentsCreated)
         {
-            string localName = GameManager.Instance.UIManager.GetLocalPlayerName();
-            if (!string.IsNullOrEmpty(localName))
-            {
-                PlayerName = localName;
-                GameManager.Instance.LogManager.LogMessage($"Setting local player name to: {localName}");
-            }
-        }
-        
-        // Set player name text
-        if (_nameText != null)
-        {
-            _nameText.text = PlayerName.ToString();
+            GameManager.Instance.LogManager.LogMessage("Components not created in Awake, creating now");
+            CreateAllComponents();
         }
         
         // Set a random color for the player when it's first spawned
@@ -88,7 +177,10 @@ public class Player : NetworkBehaviour
                 );
             }
             
-            // Check if this player is rejoining
+            // Position the player in a unique space
+            PositionPlayerInUniqueSpace();
+            
+            // Check if player is rejoining
             string playerName = PlayerName.ToString();
             if (!string.IsNullOrEmpty(playerName))
             {
@@ -103,27 +195,27 @@ public class Player : NetworkBehaviour
             }
         }
         
-        // Position the player in a unique space if it's a new spawn
-        if (HasStateAuthority && transform.position.x == 0 && transform.position.z == 0)
-        {
-            PositionPlayerInUniqueSpace();
-        }
-        
-        // Apply the color to the visual
+        // Update visuals based on networked properties
         UpdateVisuals();
         
-        // Register with LobbyManager
-        if (HasStateAuthority)
+        // Subscribe to game start event
+        GameManager.Instance.LobbyManager.OnGameStarted += HandleGameStarted;
+        
+        // If this is a newly spawned network object from another player, track it
+        if (!HasInputAuthority && Runner != null)
+        {
+            GameManager.Instance.PlayerManager.OnPlayerObjectSpawned(Runner, Object, Object.InputAuthority);
+        }
+        
+        // If this is the local player, register with the lobby manager on all clients
+        if (HasInputAuthority)
         {
             string playerName = PlayerName.ToString();
-            if (string.IsNullOrEmpty(playerName))
+            if (!string.IsNullOrEmpty(playerName))
             {
-                playerName = $"Player{UnityEngine.Random.Range(1000, 10000)}";
-                PlayerName = playerName;
+                // Register on all clients
+                RPC_RegisterPlayer(playerName, Object.InputAuthority);
             }
-            
-            GameManager.Instance.LobbyManager.RegisterPlayer(playerName, Object.InputAuthority);
-            GameManager.Instance.UIManager.UpdatePlayersList();
         }
         
         Debug.Log($"Player spawned with ID: {Object.Id} and name: {PlayerName}");
@@ -206,13 +298,23 @@ public class Player : NetworkBehaviour
             // Check if R key is pressed (button 1 in our input mapping)
             if (readyInput.buttons.IsSet(1)) 
             {
-                IsReady = !IsReady;
-                GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} ready status changed to: {IsReady}");
-                GameManager.Instance.LobbyManager.SetPlayerReadyStatus(PlayerName.ToString(), IsReady);
-                
-                // Update UI
-                GameManager.Instance.UIManager.UpdatePlayersList();
+                // Toggle ready state
+                ToggleReady();
             }
+        }
+    }
+    
+    private void ToggleReady()
+    {
+        if (HasStateAuthority)
+        {
+            // Toggle ready state directly
+            IsReady = !IsReady;
+            
+            // Update lobby manager via RPC to ensure all clients know
+            RPC_SetReadyStatus(PlayerName.ToString(), IsReady);
+            
+            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} ready status changed to: {IsReady}");
         }
     }
     
@@ -231,6 +333,13 @@ public class Player : NetworkBehaviour
         GameManager.Instance.LobbyManager.UpdatePlayerData(playerName, data);
     }
     
+    private void HandleGameStarted()
+    {
+        GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} received game started event");
+        // When the game starts, we can perform player-specific initialization here
+        // For now, we'll just log the event
+    }
+    
     public override void Render()
     {
         // Update visuals if color or name has changed over the network
@@ -241,6 +350,7 @@ public class Player : NetworkBehaviour
     {
         if (HasStateAuthority)
         {
+            GameManager.Instance.LogManager.LogMessage($"Setting player name to: {name}");
             PlayerName = name;
             UpdateVisuals();
         }
@@ -256,11 +366,47 @@ public class Player : NetworkBehaviour
         if (HasStateAuthority)
         {
             IsReady = isReady;
+            // Update all clients via RPC
+            RPC_SetReadyStatus(PlayerName.ToString(), isReady);
+            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} ready status set to {isReady} via SetReadyStatus method");
         }
     }
     
     public bool GetReadyStatus()
     {
         return IsReady;
+    }
+    
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_RegisterPlayer(string playerName, PlayerRef playerRef)
+    {
+        // This RPC ensures all clients register the player
+        GameManager.Instance.LogManager.LogMessage($"RPC received to register player: {playerName}");
+        GameManager.Instance.LobbyManager.RegisterPlayer(playerName, playerRef);
+    }
+    
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_SetReadyStatus(string playerName, bool isReady)
+    {
+        // This RPC ensures all clients update the ready status
+        GameManager.Instance.LogManager.LogMessage($"RPC received to set ready status: {playerName} = {isReady}");
+        GameManager.Instance.LobbyManager.SetPlayerReadyStatus(playerName, isReady);
+        
+        // Update UI on all clients
+        GameManager.Instance.UIManager.UpdatePlayersList();
+        
+        // Force ready status check for single player mode
+        if (GameManager.Instance.PlayerManager.GetPlayerCount() == 1)
+        {
+            GameManager.Instance.LobbyManager.DebugForceReadyCheck();
+        }
+    }
+    
+    public override void Despawned(NetworkRunner runner, bool hasState)
+    {
+        base.Despawned(runner, hasState);
+        
+        // Unsubscribe from events
+        GameManager.Instance.LobbyManager.OnGameStarted -= HandleGameStarted;
     }
 }

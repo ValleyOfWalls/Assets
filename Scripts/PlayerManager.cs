@@ -23,11 +23,19 @@ public class PlayerManager : MonoBehaviour
         }
     }
     
-    public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
+    // Only spawns the local player
+    public void OnLocalPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
         try 
         {
-            GameManager.Instance.LogManager.LogMessage($"Player {player} joined - spawning player");
+            // Only the local player should spawn their own character
+            if (_players.ContainsKey(player))
+            {
+                GameManager.Instance.LogManager.LogMessage($"Player {player} is already spawned");
+                return;
+            }
+            
+            GameManager.Instance.LogManager.LogMessage($"Local player {player} joined - spawning player");
             
             if (_playerPrefab == null)
             {
@@ -36,15 +44,11 @@ public class PlayerManager : MonoBehaviour
             }
             
             // Get player name from UI
-            string playerName = "";
-            if (player == runner.LocalPlayer)
-            {
-                playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
-            }
+            string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
             
             // Check if this player is rejoining
             bool isRejoining = !string.IsNullOrEmpty(playerName) && 
-                               GameManager.Instance.NetworkManager.CheckIsRejoining(playerName);
+                               GameManager.Instance.LobbyManager.CheckIsRejoining(playerName);
             
             // Position the player with a unique position based on player ID to avoid spawn collisions
             Vector3 spawnPosition = new Vector3(
@@ -65,38 +69,25 @@ public class PlayerManager : MonoBehaviour
                 Player playerComponent = playerObject.GetComponent<Player>();
                 if (playerComponent != null)
                 {
-                    if (player == runner.LocalPlayer)
+                    playerComponent.SetPlayerName(playerName);
+                    
+                    if (isRejoining)
                     {
-                        playerComponent.SetPlayerName(playerName);
-                        
-                        if (isRejoining)
-                        {
-                            GameManager.Instance.LogManager.LogMessage($"Player {playerName} is rejoining the game");
-                            GameManager.Instance.UIManager.UpdateStatus($"Rejoined as {playerName}");
-                        }
-                        else
-                        {
-                            GameManager.Instance.LogManager.LogMessage($"Player {playerName} joined the game");
-                            GameManager.Instance.UIManager.UpdateStatus($"You joined as {playerName}");
-                        }
+                        GameManager.Instance.LogManager.LogMessage($"Player {playerName} is rejoining the game");
+                        GameManager.Instance.UIManager.UpdateStatus($"Rejoined as {playerName}");
+                    }
+                    else
+                    {
+                        GameManager.Instance.LogManager.LogMessage($"Player {playerName} joined the game");
+                        GameManager.Instance.UIManager.UpdateStatus($"You joined as {playerName}");
                     }
                 }
                 
-                GameManager.Instance.LogManager.LogMessage($"Player {player} spawned successfully with object ID: {playerObject.Id}");
+                GameManager.Instance.LogManager.LogMessage($"Local player {player} spawned successfully with object ID: {playerObject.Id}");
                 
-                // Only create camera for the local player
-                if (player == runner.LocalPlayer)
-                {
-                    GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
-                    GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
-                }
-                else
-                {
-                    GameManager.Instance.LogManager.LogMessage($"Remote player {player} joined");
-                }
-                
-                // Update the lobby UI
-                GameManager.Instance.UIManager.UpdatePlayersList();
+                // Create camera for the local player
+                GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
+                GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
             }
             else
             {
@@ -108,7 +99,23 @@ public class PlayerManager : MonoBehaviour
         }
         catch (Exception ex) 
         {
-            GameManager.Instance.LogManager.LogError($"Error in OnPlayerJoined: {ex.Message}\n{ex.StackTrace}");
+            GameManager.Instance.LogManager.LogError($"Error in OnLocalPlayerJoined: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+    
+    // Just track remote players that joined (their clients will spawn their characters)
+    public void OnRemotePlayerJoined(NetworkRunner runner, PlayerRef player)
+    {
+        GameManager.Instance.LogManager.LogMessage($"Remote player {player} joined - waiting for their character to spawn");
+    }
+    
+    // Called when a network player object spawns
+    public void OnPlayerObjectSpawned(NetworkRunner runner, NetworkObject playerObject, PlayerRef player)
+    {
+        if (!_players.ContainsKey(player))
+        {
+            _players[player] = playerObject;
+            GameManager.Instance.LogManager.LogMessage($"Tracking new remote player object: {playerObject.Id} for player {player}");
         }
     }
     
@@ -126,6 +133,13 @@ public class PlayerManager : MonoBehaviour
                 if (playerComponent != null)
                 {
                     playerName = playerComponent.GetPlayerName();
+                    
+                    // Don't remove from lobby manager to allow rejoining later
+                    // But do mark them as not ready if they were ready
+                    if (!string.IsNullOrEmpty(playerName))
+                    {
+                        GameManager.Instance.LobbyManager.SetPlayerReadyStatus(playerName, false);
+                    }
                 }
             }
         }
@@ -140,8 +154,6 @@ public class PlayerManager : MonoBehaviour
             }
             _players.Remove(player);
         }
-        
-        // Don't remove from lobby manager to allow rejoining
         
         GameManager.Instance.LogManager.LogMessage($"Players remaining in session: {_players.Count}");
         
