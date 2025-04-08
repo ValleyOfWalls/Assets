@@ -51,9 +51,8 @@ public class PlayerManager : MonoBehaviour
                                GameManager.Instance.LobbyManager.CheckIsRejoining(playerName);
             
             // Position the player with a unique position based on player ID to avoid spawn collisions
-            Vector3 spawnPosition = new Vector3(
+            Vector2 spawnPosition = new Vector2(
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId, 
-                1.0f, // Fixed Y position at 1.0
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId
             );
             

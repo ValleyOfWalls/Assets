@@ -7,33 +7,27 @@ public class Player : NetworkBehaviour
     [Networked] public Color PlayerColor { get; set; }
     [Networked] public NetworkString<_32> PlayerName { get; set; }
     [Networked] public NetworkBool IsReady { get; set; }
+    [Networked] private Vector2 NetworkedPosition { get; set; }
     
-    // Add networked position to ensure synchronization between clients
-    [Networked] private Vector3 NetworkedPosition { get; set; }
-    
-    // Visual components - references only, created programmatically
+    // Visual components
     private SpriteRenderer _spriteRenderer;
     private TextMeshPro _nameText;
-    private CharacterController _characterController;
+    
+    // Physics components for 2D
+    private CircleCollider2D _collider;
+    private Rigidbody2D _rigidbody;
     
     // Movement speed
     private float _moveSpeed = 5f;
     
-    // Screen position management
+    // Screen bounds
     private Vector2 _screenBounds;
     
     // Track if components were created
     private bool _componentsCreated = false;
-    
-    // Whether the player is on the ground
-    private bool _isGrounded = false;
-    
-    // Fixed Y position for 2D movement
-    private float _fixedYPosition = 1.0f;
 
     private void Awake()
     {
-        // Create components immediately when the object is instantiated
         CreateAllComponents();
         
         // Calculate screen bounds
@@ -46,7 +40,6 @@ public class Player : NetworkBehaviour
         }
     }
 
-    // Create all required components
     private void CreateAllComponents()
     {
         if (_componentsCreated)
@@ -55,8 +48,8 @@ public class Player : NetworkBehaviour
         if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
             GameManager.Instance.LogManager.LogMessage($"Creating components for player gameObject: {gameObject.name}");
         
-        // Create CharacterController
-        CreateCharacterController();
+        // Create 2D physics components
+        Create2DPhysicsComponents();
         
         // Create visuals
         CreateVisualComponents();
@@ -67,20 +60,33 @@ public class Player : NetworkBehaviour
             GameManager.Instance.LogManager.LogMessage("All components created for player");
     }
     
-    private void CreateCharacterController()
+    private void Create2DPhysicsComponents()
     {
-        // Check if character controller exists
-        _characterController = GetComponent<CharacterController>();
-        if (_characterController == null)
+        // Check if collider exists
+        _collider = GetComponent<CircleCollider2D>();
+        if (_collider == null)
         {
-            // Add character controller
-            _characterController = gameObject.AddComponent<CharacterController>();
-            _characterController.radius = 0.5f;
-            _characterController.height = 0.2f; // Make it flatter for 2D-like movement
-            _characterController.center = new Vector3(0, 0.1f, 0); // Lower center for stability
+            _collider = gameObject.AddComponent<CircleCollider2D>();
+            _collider.radius = 0.5f;
             
             if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
-                GameManager.Instance.LogManager.LogMessage("Created CharacterController for player");
+                GameManager.Instance.LogManager.LogMessage("Created CircleCollider2D for player");
+        }
+        
+        // Check if rigidbody exists
+        _rigidbody = GetComponent<Rigidbody2D>();
+        if (_rigidbody == null)
+        {
+            _rigidbody = gameObject.AddComponent<Rigidbody2D>();
+            _rigidbody.gravityScale = 0f; // No gravity in 2D
+            _rigidbody.linearDamping = 5f; // Add some drag for smoother movement
+            _rigidbody.angularDamping = 5f;
+            _rigidbody.constraints = RigidbodyConstraints2D.FreezeRotation; // Prevent rotation
+            _rigidbody.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+            _rigidbody.interpolation = RigidbodyInterpolation2D.Interpolate;
+            
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage("Created Rigidbody2D for player");
         }
     }
     
@@ -102,15 +108,12 @@ public class Player : NetworkBehaviour
             // Create a child object for the sprite
             GameObject spriteObj = new GameObject("PlayerSprite");
             spriteObj.transform.SetParent(transform, false);
-            spriteObj.transform.localPosition = new Vector3(0, 0.1f, 0); // Slightly above ground
+            spriteObj.transform.localPosition = Vector3.zero;
             
             // Add sprite renderer
             _spriteRenderer = spriteObj.AddComponent<SpriteRenderer>();
             _spriteRenderer.sprite = CreateDefaultSprite();
             _spriteRenderer.sortingOrder = 1;
-            
-            // Rotate sprite to be visible from top-down camera
-            spriteObj.transform.rotation = Quaternion.Euler(90, 0, 0);
             
             if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
                 GameManager.Instance.LogManager.LogMessage("Created sprite renderer for player");
@@ -126,7 +129,7 @@ public class Player : NetworkBehaviour
             // Create a child object for the text
             GameObject textObj = new GameObject("PlayerNameText");
             textObj.transform.SetParent(transform, false);
-            textObj.transform.localPosition = new Vector3(0, 1.5f, 0);
+            textObj.transform.localPosition = new Vector3(0, 1.0f, 0);
             
             // Add text mesh pro component
             _nameText = textObj.AddComponent<TextMeshPro>();
@@ -134,9 +137,6 @@ public class Player : NetworkBehaviour
             _nameText.alignment = TextAlignmentOptions.Center;
             _nameText.color = Color.white;
             _nameText.text = "Player";
-            
-            // Make text face the camera
-            textObj.transform.rotation = Quaternion.Euler(90, 0, 0);
             
             if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
                 GameManager.Instance.LogManager.LogMessage("Created text mesh for player name");
@@ -177,7 +177,7 @@ public class Player : NetworkBehaviour
         if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
             GameManager.Instance.LogManager.LogMessage($"Player Spawned: HasStateAuthority={HasStateAuthority}, HasInputAuthority={HasInputAuthority}, ID={Object.Id}, InputAuthority={Object.InputAuthority}");
         
-        // Double-check components were created (they should have been in Awake)
+        // Double-check components were created
         if (!_componentsCreated)
         {
             if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
@@ -211,11 +211,10 @@ public class Player : NetworkBehaviour
                 PlayerData savedData = GameManager.Instance.LobbyManager.GetPlayerData(playerName);
                 if (savedData != null)
                 {
-                    // Restore player state, but maintain Y position
-                    Vector3 position = savedData.Position;
-                    position.y = _fixedYPosition;
+                    // Restore player state in 2D (x, y)
+                    Vector2 position = new Vector2(savedData.Position.x, savedData.Position.y);
                     transform.position = position;
-                    NetworkedPosition = position; // Important: Update networked position too
+                    NetworkedPosition = position;
                     PlayerColor = savedData.PlayerColor;
                     
                     if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
@@ -249,7 +248,7 @@ public class Player : NetworkBehaviour
             
             if (!string.IsNullOrEmpty(playerName))
             {
-                // Register on all clients - IMPORTANT: This ensures player is added to lobby manager
+                // Register on all clients
                 RPC_RegisterPlayer(playerName, Object.InputAuthority);
                 
                 if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
@@ -277,17 +276,16 @@ public class Player : NetworkBehaviour
         // Calculate position based on grid
         float spacing = 4f; // Space between players
         float startX = -((cols - 1) * spacing) / 2;
-        float startZ = -((rows - 1) * spacing) / 2;
+        float startY = -((rows - 1) * spacing) / 2;
         
-        // Use fixed Y position
-        Vector3 position = new Vector3(
+        // Position in 2D space (x, y)
+        Vector2 position = new Vector2(
             startX + col * spacing,
-            _fixedYPosition, // Keep y at fixed position
-            startZ + row * spacing
+            startY + row * spacing
         );
         
         transform.position = position;
-        NetworkedPosition = position; // Initialize networked position
+        NetworkedPosition = position;
         
         if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
             GameManager.Instance.LogManager.LogMessage($"Positioned player at {position}");
@@ -311,68 +309,36 @@ public class Player : NetworkBehaviour
         if (GameManager.Instance.LobbyManager.IsGameStarted() || !GameManager.Instance.NetworkManager.IsConnected)
             return;
             
-        // For StateAuthority (server/host), apply position from networked value
-        if (HasStateAuthority && !HasInputAuthority) 
+        // For state authority but not input authority, apply networked position
+        if (HasStateAuthority && !HasInputAuthority)
         {
             transform.position = NetworkedPosition;
         }
         
-        // For InputAuthority (local player), apply inputs and update networked position
-        if (GetInput(out NetworkInputData data))
+        // For input authority, apply movement and update networked position
+        if (GetInput(out NetworkInputData data) && HasInputAuthority)
         {
-            // Apply movement only when we have input authority
-            if (HasInputAuthority)
+            // 2D movement (x, y)
+            Vector2 move = new Vector2(data.horizontal, data.vertical);
+            move = move.normalized * _moveSpeed * Runner.DeltaTime;
+            
+            if (_rigidbody != null)
             {
-                // 2D-like movement in 3D space using CharacterController
-                Vector3 move = new Vector3(data.horizontal, 0, data.vertical);
-                move = move.normalized * _moveSpeed * Runner.DeltaTime;
+                // Apply movement forces
+                _rigidbody.MovePosition(_rigidbody.position + move);
                 
-                if (_characterController != null)
+                // Update networked position if we have state authority
+                if (HasStateAuthority)
                 {
-                    // Apply movement
-                    _characterController.Move(move);
-                    
-                    // Check if grounded
-                    _isGrounded = _characterController.isGrounded;
-                    
-                    // Apply gravity only if not grounded
-                    if (!_isGrounded)
-                    {
-                        // Apply reduced gravity
-                        _characterController.Move(Vector3.down * 9.81f * 0.3f * Runner.DeltaTime);
-                    }
-                    
-                    // Maintain fixed Y position
-                    if (Mathf.Abs(transform.position.y - _fixedYPosition) > 0.1f)
-                    {
-                        Vector3 correctedPosition = transform.position;
-                        correctedPosition.y = _fixedYPosition;
-                        transform.position = correctedPosition;
-                    }
-                    
-                    // Update the networked position for synchronization
-                    if (HasStateAuthority)
-                    {
-                        NetworkedPosition = transform.position;
-                    }
+                    NetworkedPosition = transform.position;
                 }
-                
-                // Save player position for rejoining
-                SavePlayerState();
             }
-        }
-        
-        // If we're not the InputAuthority, but we're the StateAuthority, sync position
-        else if (HasStateAuthority)
-        {
-            transform.position = NetworkedPosition;
-        }
-        
-        // Check ready status button press
-        if (HasInputAuthority && GetInput(out NetworkInputData readyInput))
-        {
-            // Check if R key is pressed (button 1 in our input mapping)
-            if (readyInput.buttons.IsSet(1)) 
+            
+            // Save player position for rejoining
+            SavePlayerState();
+            
+            // Check ready status button press
+            if (data.buttons.IsSet(1)) 
             {
                 // Toggle ready state
                 ToggleReady();
@@ -380,25 +346,15 @@ public class Player : NetworkBehaviour
         }
     }
     
-    // For non-network authority objects, use Render which is called after FixedUpdateNetwork 
-    // to ensure smooth position interpolation
     public override void Render()
     {
+        // If we don't have state authority, interpolate to the networked position
         if (!HasStateAuthority)
         {
-            // For all other clients, interpolate to the networked position for smooth movement
-            transform.position = Vector3.Lerp(transform.position, NetworkedPosition, Runner.DeltaTime * 10f);
-            
-            // Ensure fixed Y position
-            if (Mathf.Abs(transform.position.y - _fixedYPosition) > 0.05f)
-            {
-                Vector3 position = transform.position;
-                position.y = _fixedYPosition;
-                transform.position = position;
-            }
+            transform.position = Vector2.Lerp(transform.position, NetworkedPosition, Runner.DeltaTime * 10f);
         }
         
-        // Update visuals if color or name has changed over the network
+        // Update visuals
         UpdateVisuals();
     }
     
@@ -436,8 +392,6 @@ public class Player : NetworkBehaviour
     {
         if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
             GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} received game started event");
-        // When the game starts, we can perform player-specific initialization here
-        // For now, we'll just log the event
     }
     
     public void SetPlayerName(string name)

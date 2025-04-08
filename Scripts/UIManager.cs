@@ -31,12 +31,6 @@ public class UIManager : MonoBehaviour
     // Dictionary to keep track of player list items in UI
     private Dictionary<string, GameObject> _playerListItems = new Dictionary<string, GameObject>();
     
-    // Debug controls
-    private Button _debugReadyButton;
-    
-    // Debug placeholders - delete after testing
-    private GameObject _debugPlayerListItem;
-    
     public void Initialize()
     {
         GameManager.Instance.LogManager.LogMessage("Initializing UIManager...");
@@ -44,9 +38,6 @@ public class UIManager : MonoBehaviour
         // Create UI
         CreateUI();
         SetupUIListeners();
-        
-        // Create a temporary player list item for testing
-        CreateDebugPlayerItem();
         
         // Subscribe to LobbyManager events
         GameManager.Instance.LobbyManager.OnAllPlayersReady += HandleAllPlayersReady;
@@ -75,9 +66,6 @@ public class UIManager : MonoBehaviour
         
         // Create a panel for game started UI
         CreateGameStartedPanel(canvasObj);
-        
-        // Create debug controls for testing
-        CreateDebugControls(canvasObj);
         
         // Hide lobby panel and game started panel initially
         _lobbyPanel.SetActive(false);
@@ -372,7 +360,7 @@ public class UIManager : MonoBehaviour
         GameObject readyButtonText = new GameObject("Text");
         readyButtonText.transform.SetParent(readyButtonObj.transform, false);
         TMP_Text readyText = readyButtonText.AddComponent<TextMeshProUGUI>();
-        readyText.text = "Ready (or press R)";
+        readyText.text = "Ready";
         readyText.fontSize = 18;
         readyText.alignment = TextAlignmentOptions.Center;
         readyText.color = Color.white;
@@ -429,47 +417,6 @@ public class UIManager : MonoBehaviour
         gameStartedTextRect.offsetMax = Vector2.zero;
     }
     
-    private void CreateDebugControls(GameObject parentCanvas)
-    {
-        // Add a debug panel
-        GameObject debugControlsObj = new GameObject("Debug Controls");
-        debugControlsObj.transform.SetParent(_uiCanvas.transform, false);
-        
-        // Add a RectTransform component explicitly
-        RectTransform debugRect = debugControlsObj.AddComponent<RectTransform>();
-        debugRect.anchorMin = new Vector2(0.8f, 0.9f);
-        debugRect.anchorMax = new Vector2(1f, 1f);
-        debugRect.offsetMin = Vector2.zero;
-        debugRect.offsetMax = Vector2.zero;
-        
-        // Add a ready toggle button for debugging
-        GameObject debugReadyObj = new GameObject("Debug Ready Button");
-        debugReadyObj.transform.SetParent(debugControlsObj.transform, false);
-        _debugReadyButton = debugReadyObj.AddComponent<Button>();
-        Image debugReadyImage = debugReadyObj.AddComponent<Image>();
-        debugReadyImage.color = new Color(1f, 0f, 0f, 0.5f);
-        
-        RectTransform debugReadyRect = debugReadyObj.GetComponent<RectTransform>();
-        debugReadyRect.anchorMin = new Vector2(0f, 0f);
-        debugReadyRect.anchorMax = new Vector2(1f, 1f);
-        debugReadyRect.offsetMin = Vector2.zero;
-        debugReadyRect.offsetMax = Vector2.zero;
-        
-        GameObject debugReadyText = new GameObject("Text");
-        debugReadyText.transform.SetParent(debugReadyObj.transform, false);
-        TMP_Text readyText = debugReadyText.AddComponent<TextMeshProUGUI>();
-        readyText.text = "R";
-        readyText.fontSize = 20;
-        readyText.alignment = TextAlignmentOptions.Center;
-        readyText.color = Color.white;
-        
-        RectTransform debugTextRect = debugReadyText.GetComponent<RectTransform>();
-        debugTextRect.anchorMin = Vector2.zero;
-        debugTextRect.anchorMax = Vector2.one;
-        debugTextRect.offsetMin = Vector2.zero;
-        debugTextRect.offsetMax = Vector2.zero;
-    }
-    
     private GameObject CreatePlayerListItemPrefab()
     {
         GameObject itemObj = new GameObject("Player List Item");
@@ -517,29 +464,6 @@ public class UIManager : MonoBehaviour
         
         return itemObj;
     }
-    
-    // Create a debug player list item to verify UI is working
-    private void CreateDebugPlayerItem()
-    {
-        if (_playerListContent == null)
-        {
-            GameManager.Instance.LogManager.LogError("Player list content is still null when trying to create debug item");
-            return;
-        }
-        
-        // Create a debug player list item
-        _debugPlayerListItem = Instantiate(_playerListItemPrefab, _playerListContent);
-        _debugPlayerListItem.SetActive(true);
-        
-        // Set debug text
-        TMP_Text nameText = _debugPlayerListItem.transform.Find("Player Name")?.GetComponent<TMP_Text>();
-        if (nameText != null)
-        {
-            nameText.text = "DEBUG PLAYER";
-        }
-        
-        GameManager.Instance.LogManager.LogMessage("Created debug player list item");
-    }
 
     private void SetupUIListeners()
     {
@@ -565,15 +489,6 @@ public class UIManager : MonoBehaviour
         {
             _readyButton.onClick.RemoveAllListeners();
             _readyButton.onClick.AddListener(() => {
-                SetLocalPlayerReady();
-            });
-        }
-        
-        if (_debugReadyButton != null)
-        {
-            _debugReadyButton.onClick.RemoveAllListeners();
-            _debugReadyButton.onClick.AddListener(() => {
-                GameManager.Instance.LogManager.LogMessage("Debug ready button pressed - simulating R key press");
                 SetLocalPlayerReady();
             });
         }
@@ -636,7 +551,7 @@ public class UIManager : MonoBehaviour
                     TMP_Text buttonText = button.GetComponentInChildren<TMP_Text>();
                     if (buttonText != null)
                     {
-                        buttonText.text = "Ready (or press R)";
+                        buttonText.text = "Ready";
                     }
                 }
             }

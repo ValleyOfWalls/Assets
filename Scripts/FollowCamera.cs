@@ -3,8 +3,7 @@ using UnityEngine;
 public class FollowCamera : MonoBehaviour
 {
     private Transform _target;
-    public Vector3 offset = new Vector3(0, 15, 0); // Higher up for better view
-    public float smoothSpeed = 0.2f; // Smoother camera movement
+    public float smoothSpeed = 0.2f;
     
     // For zooming out based on player count
     private float _targetOrthographicSize = 10f;
@@ -17,10 +16,7 @@ public class FollowCamera : MonoBehaviour
         if (_target != null)
         {
             // Initially set the camera position directly to avoid lag
-            transform.position = _target.position + offset;
-            
-            // Set initial rotation
-            transform.rotation = Quaternion.Euler(90, 0, 0);
+            transform.position = new Vector3(_target.position.x, _target.position.y, -10); // Keep z at -10 for 2D
         }
     }
 
@@ -29,15 +25,12 @@ public class FollowCamera : MonoBehaviour
         if (_target == null)
             return;
 
-        // Calculate the desired position
-        Vector3 desiredPosition = _target.position + offset;
+        // Calculate the desired position (keep z at -10 for 2D camera)
+        Vector3 desiredPosition = new Vector3(_target.position.x, _target.position.y, -10);
         
         // Smoothly move the camera
         Vector3 smoothedPosition = Vector3.Lerp(transform.position, desiredPosition, smoothSpeed);
         transform.position = smoothedPosition;
-        
-        // Ensure camera is pointing down for top-down view
-        transform.rotation = Quaternion.Euler(90, 0, 0);
         
         // Adjust orthographic size based on player count
         AdjustZoomForPlayerCount();
