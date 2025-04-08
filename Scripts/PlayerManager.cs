@@ -53,7 +53,7 @@ public class PlayerManager : MonoBehaviour
             // Position the player with a unique position based on player ID to avoid spawn collisions
             Vector3 spawnPosition = new Vector3(
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId, 
-                0, 
+                1.0f, // Fixed Y position at 1.0
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId
             );
             
@@ -69,6 +69,7 @@ public class PlayerManager : MonoBehaviour
                 Player playerComponent = playerObject.GetComponent<Player>();
                 if (playerComponent != null)
                 {
+                    // Set player name before any RPC calls
                     playerComponent.SetPlayerName(playerName);
                     
                     if (isRejoining)
@@ -84,6 +85,14 @@ public class PlayerManager : MonoBehaviour
                 }
                 
                 GameManager.Instance.LogManager.LogMessage($"Local player {player} spawned successfully with object ID: {playerObject.Id}");
+                
+                // Explicitly ensure this player is registered in the lobby
+                if (!string.IsNullOrEmpty(playerName))
+                {
+                    // This direct call helps ensure registration happens
+                    GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
+                    GameManager.Instance.LogManager.LogMessage($"Directly registering player {playerName} with lobby manager");
+                }
                 
                 // Create camera for the local player
                 GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
@@ -116,6 +125,22 @@ public class PlayerManager : MonoBehaviour
         {
             _players[player] = playerObject;
             GameManager.Instance.LogManager.LogMessage($"Tracking new remote player object: {playerObject.Id} for player {player}");
+            
+            // Get player component to check if it has a name
+            Player playerComponent = playerObject.GetComponent<Player>();
+            if (playerComponent != null)
+            {
+                string playerName = playerComponent.GetPlayerName();
+                if (!string.IsNullOrEmpty(playerName))
+                {
+                    // Ensure this player is in the lobby manager
+                    GameManager.Instance.LogManager.LogMessage($"Ensuring player {playerName} is in lobby manager");
+                    GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
+                    
+                    // Update UI
+                    GameManager.Instance.UIManager.UpdatePlayersList();
+                }
+            }
         }
     }
     

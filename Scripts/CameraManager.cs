@@ -20,9 +20,9 @@ public class CameraManager : MonoBehaviour
         // Add camera component
         Camera cam = _cameraPrefab.AddComponent<Camera>();
         
-        // Configure for 2D
+        // Configure for 2D top-down view
         cam.orthographic = true;
-        cam.orthographicSize = 5f; // Set to appropriate size for the game
+        cam.orthographicSize = 10f; // Larger field of view
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = new Color(0.2f, 0.2f, 0.3f); // Dark blue-ish background
         
@@ -40,8 +40,8 @@ public class CameraManager : MonoBehaviour
         
         // Add follow script
         FollowCamera follow = _cameraPrefab.AddComponent<FollowCamera>();
-        follow.offset = new Vector3(0, 10, 0); // Camera looks down from above for 2D
-        follow.smoothSpeed = 0.125f;
+        follow.offset = new Vector3(0, 15, 0); // Higher up for better view
+        follow.smoothSpeed = 0.2f; // Smoother following
         
         GameManager.Instance.LogManager.LogMessage("Camera prefab created");
     }
@@ -76,7 +76,7 @@ public class CameraManager : MonoBehaviour
         if (followCam != null)
         {
             followCam.SetTarget(playerTransform);
-            followCam.offset = new Vector3(0, 10, 0); // Top-down view for 2D
+            followCam.offset = new Vector3(0, 15, -2); // Position behind and above for better perspective
             GameManager.Instance.LogManager.LogMessage("Camera created and following player");
         }
         else

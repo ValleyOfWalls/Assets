@@ -8,6 +8,9 @@ public class Player : NetworkBehaviour
     [Networked] public NetworkString<_32> PlayerName { get; set; }
     [Networked] public NetworkBool IsReady { get; set; }
     
+    // Add networked position to ensure synchronization between clients
+    [Networked] private Vector3 NetworkedPosition { get; set; }
+    
     // Visual components - references only, created programmatically
     private SpriteRenderer _spriteRenderer;
     private TextMeshPro _nameText;
@@ -21,6 +24,12 @@ public class Player : NetworkBehaviour
     
     // Track if components were created
     private bool _componentsCreated = false;
+    
+    // Whether the player is on the ground
+    private bool _isGrounded = false;
+    
+    // Fixed Y position for 2D movement
+    private float _fixedYPosition = 1.0f;
 
     private void Awake()
     {
@@ -43,7 +52,8 @@ public class Player : NetworkBehaviour
         if (_componentsCreated)
             return;
 
-        GameManager.Instance.LogManager.LogMessage($"Creating components for player gameObject: {gameObject.name}");
+        if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            GameManager.Instance.LogManager.LogMessage($"Creating components for player gameObject: {gameObject.name}");
         
         // Create CharacterController
         CreateCharacterController();
@@ -52,7 +62,9 @@ public class Player : NetworkBehaviour
         CreateVisualComponents();
         
         _componentsCreated = true;
-        GameManager.Instance.LogManager.LogMessage("All components created for player");
+        
+        if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            GameManager.Instance.LogManager.LogMessage("All components created for player");
     }
     
     private void CreateCharacterController()
@@ -64,9 +76,11 @@ public class Player : NetworkBehaviour
             // Add character controller
             _characterController = gameObject.AddComponent<CharacterController>();
             _characterController.radius = 0.5f;
-            _characterController.height = 2f;
-            _characterController.center = new Vector3(0, 1f, 0);
-            GameManager.Instance.LogManager.LogMessage("Created CharacterController for player");
+            _characterController.height = 0.2f; // Make it flatter for 2D-like movement
+            _characterController.center = new Vector3(0, 0.1f, 0); // Lower center for stability
+            
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage("Created CharacterController for player");
         }
     }
     
@@ -88,14 +102,18 @@ public class Player : NetworkBehaviour
             // Create a child object for the sprite
             GameObject spriteObj = new GameObject("PlayerSprite");
             spriteObj.transform.SetParent(transform, false);
-            spriteObj.transform.localPosition = new Vector3(0, 0, 0);
+            spriteObj.transform.localPosition = new Vector3(0, 0.1f, 0); // Slightly above ground
             
             // Add sprite renderer
             _spriteRenderer = spriteObj.AddComponent<SpriteRenderer>();
             _spriteRenderer.sprite = CreateDefaultSprite();
             _spriteRenderer.sortingOrder = 1;
             
-            GameManager.Instance.LogManager.LogMessage("Created sprite renderer for player");
+            // Rotate sprite to be visible from top-down camera
+            spriteObj.transform.rotation = Quaternion.Euler(90, 0, 0);
+            
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage("Created sprite renderer for player");
         }
     }
     
@@ -120,7 +138,8 @@ public class Player : NetworkBehaviour
             // Make text face the camera
             textObj.transform.rotation = Quaternion.Euler(90, 0, 0);
             
-            GameManager.Instance.LogManager.LogMessage("Created text mesh for player name");
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage("Created text mesh for player name");
         }
     }
     
@@ -155,12 +174,14 @@ public class Player : NetworkBehaviour
     {
         base.Spawned();
         
-        GameManager.Instance.LogManager.LogMessage($"Player Spawned: HasStateAuthority={HasStateAuthority}, HasInputAuthority={HasInputAuthority}, ID={Object.Id}, InputAuthority={Object.InputAuthority}");
+        if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            GameManager.Instance.LogManager.LogMessage($"Player Spawned: HasStateAuthority={HasStateAuthority}, HasInputAuthority={HasInputAuthority}, ID={Object.Id}, InputAuthority={Object.InputAuthority}");
         
         // Double-check components were created (they should have been in Awake)
         if (!_componentsCreated)
         {
-            GameManager.Instance.LogManager.LogMessage("Components not created in Awake, creating now");
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage("Components not created in Awake, creating now");
             CreateAllComponents();
         }
         
@@ -180,6 +201,9 @@ public class Player : NetworkBehaviour
             // Position the player in a unique space
             PositionPlayerInUniqueSpace();
             
+            // Initialize networked position
+            NetworkedPosition = transform.position;
+            
             // Check if player is rejoining
             string playerName = PlayerName.ToString();
             if (!string.IsNullOrEmpty(playerName))
@@ -187,10 +211,15 @@ public class Player : NetworkBehaviour
                 PlayerData savedData = GameManager.Instance.LobbyManager.GetPlayerData(playerName);
                 if (savedData != null)
                 {
-                    // Restore player state
-                    transform.position = savedData.Position;
+                    // Restore player state, but maintain Y position
+                    Vector3 position = savedData.Position;
+                    position.y = _fixedYPosition;
+                    transform.position = position;
+                    NetworkedPosition = position; // Important: Update networked position too
                     PlayerColor = savedData.PlayerColor;
-                    GameManager.Instance.LogManager.LogMessage($"Restored state for player {playerName}");
+                    
+                    if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                        GameManager.Instance.LogManager.LogMessage($"Restored state for player {playerName}");
                 }
             }
         }
@@ -207,14 +236,24 @@ public class Player : NetworkBehaviour
             GameManager.Instance.PlayerManager.OnPlayerObjectSpawned(Runner, Object, Object.InputAuthority);
         }
         
-        // If this is the local player, register with the lobby manager on all clients
+        // If this is the local player, register with the lobby manager
         if (HasInputAuthority)
         {
             string playerName = PlayerName.ToString();
+            if (string.IsNullOrEmpty(playerName))
+            {
+                // Get name from UIManager if not set
+                playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
+                PlayerName = playerName;
+            }
+            
             if (!string.IsNullOrEmpty(playerName))
             {
-                // Register on all clients
+                // Register on all clients - IMPORTANT: This ensures player is added to lobby manager
                 RPC_RegisterPlayer(playerName, Object.InputAuthority);
+                
+                if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                    GameManager.Instance.LogManager.LogMessage($"Sent RPC to register player: {playerName}");
             }
         }
         
@@ -238,17 +277,20 @@ public class Player : NetworkBehaviour
         // Calculate position based on grid
         float spacing = 4f; // Space between players
         float startX = -((cols - 1) * spacing) / 2;
-        float startY = -((rows - 1) * spacing) / 2;
+        float startZ = -((rows - 1) * spacing) / 2;
         
-        // Since we're working in 3D with CharacterController, use X and Z
+        // Use fixed Y position
         Vector3 position = new Vector3(
             startX + col * spacing,
-            1, // Keep y at 1 for CharacterController
-            startY + row * spacing
+            _fixedYPosition, // Keep y at fixed position
+            startZ + row * spacing
         );
         
         transform.position = position;
-        GameManager.Instance.LogManager.LogMessage($"Positioned player at {position}");
+        NetworkedPosition = position; // Initialize networked position
+        
+        if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            GameManager.Instance.LogManager.LogMessage($"Positioned player at {position}");
     }
     
     private void UpdateVisuals()
@@ -269,6 +311,13 @@ public class Player : NetworkBehaviour
         if (GameManager.Instance.LobbyManager.IsGameStarted() || !GameManager.Instance.NetworkManager.IsConnected)
             return;
             
+        // For StateAuthority (server/host), apply position from networked value
+        if (HasStateAuthority && !HasInputAuthority) 
+        {
+            transform.position = NetworkedPosition;
+        }
+        
+        // For InputAuthority (local player), apply inputs and update networked position
         if (GetInput(out NetworkInputData data))
         {
             // Apply movement only when we have input authority
@@ -283,13 +332,40 @@ public class Player : NetworkBehaviour
                     // Apply movement
                     _characterController.Move(move);
                     
-                    // Apply gravity to keep the player grounded
-                    _characterController.Move(Vector3.down * 9.81f * Runner.DeltaTime);
+                    // Check if grounded
+                    _isGrounded = _characterController.isGrounded;
+                    
+                    // Apply gravity only if not grounded
+                    if (!_isGrounded)
+                    {
+                        // Apply reduced gravity
+                        _characterController.Move(Vector3.down * 9.81f * 0.3f * Runner.DeltaTime);
+                    }
+                    
+                    // Maintain fixed Y position
+                    if (Mathf.Abs(transform.position.y - _fixedYPosition) > 0.1f)
+                    {
+                        Vector3 correctedPosition = transform.position;
+                        correctedPosition.y = _fixedYPosition;
+                        transform.position = correctedPosition;
+                    }
+                    
+                    // Update the networked position for synchronization
+                    if (HasStateAuthority)
+                    {
+                        NetworkedPosition = transform.position;
+                    }
                 }
                 
                 // Save player position for rejoining
                 SavePlayerState();
             }
+        }
+        
+        // If we're not the InputAuthority, but we're the StateAuthority, sync position
+        else if (HasStateAuthority)
+        {
+            transform.position = NetworkedPosition;
         }
         
         // Check ready status button press
@@ -304,6 +380,28 @@ public class Player : NetworkBehaviour
         }
     }
     
+    // For non-network authority objects, use Render which is called after FixedUpdateNetwork 
+    // to ensure smooth position interpolation
+    public override void Render()
+    {
+        if (!HasStateAuthority)
+        {
+            // For all other clients, interpolate to the networked position for smooth movement
+            transform.position = Vector3.Lerp(transform.position, NetworkedPosition, Runner.DeltaTime * 10f);
+            
+            // Ensure fixed Y position
+            if (Mathf.Abs(transform.position.y - _fixedYPosition) > 0.05f)
+            {
+                Vector3 position = transform.position;
+                position.y = _fixedYPosition;
+                transform.position = position;
+            }
+        }
+        
+        // Update visuals if color or name has changed over the network
+        UpdateVisuals();
+    }
+    
     private void ToggleReady()
     {
         if (HasStateAuthority)
@@ -314,7 +412,8 @@ public class Player : NetworkBehaviour
             // Update lobby manager via RPC to ensure all clients know
             RPC_SetReadyStatus(PlayerName.ToString(), IsReady);
             
-            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} ready status changed to: {IsReady}");
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} ready status changed to: {IsReady}");
         }
     }
     
@@ -335,22 +434,18 @@ public class Player : NetworkBehaviour
     
     private void HandleGameStarted()
     {
-        GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} received game started event");
+        if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} received game started event");
         // When the game starts, we can perform player-specific initialization here
         // For now, we'll just log the event
-    }
-    
-    public override void Render()
-    {
-        // Update visuals if color or name has changed over the network
-        UpdateVisuals();
     }
     
     public void SetPlayerName(string name)
     {
         if (HasStateAuthority)
         {
-            GameManager.Instance.LogManager.LogMessage($"Setting player name to: {name}");
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage($"Setting player name to: {name}");
             PlayerName = name;
             UpdateVisuals();
         }
@@ -368,7 +463,9 @@ public class Player : NetworkBehaviour
             IsReady = isReady;
             // Update all clients via RPC
             RPC_SetReadyStatus(PlayerName.ToString(), isReady);
-            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} ready status set to {isReady} via SetReadyStatus method");
+            
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+                GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} ready status set to {isReady} via SetReadyStatus method");
         }
     }
     
@@ -381,7 +478,8 @@ public class Player : NetworkBehaviour
     private void RPC_RegisterPlayer(string playerName, PlayerRef playerRef)
     {
         // This RPC ensures all clients register the player
-        GameManager.Instance.LogManager.LogMessage($"RPC received to register player: {playerName}");
+        if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            GameManager.Instance.LogManager.LogMessage($"RPC received to register player: {playerName}");
         GameManager.Instance.LobbyManager.RegisterPlayer(playerName, playerRef);
     }
     
@@ -389,7 +487,8 @@ public class Player : NetworkBehaviour
     private void RPC_SetReadyStatus(string playerName, bool isReady)
     {
         // This RPC ensures all clients update the ready status
-        GameManager.Instance.LogManager.LogMessage($"RPC received to set ready status: {playerName} = {isReady}");
+        if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            GameManager.Instance.LogManager.LogMessage($"RPC received to set ready status: {playerName} = {isReady}");
         GameManager.Instance.LobbyManager.SetPlayerReadyStatus(playerName, isReady);
         
         // Update UI on all clients
