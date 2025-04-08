@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-// Card-related enums (keep if you don't already have these defined)
+// Card-related enums
 public enum CardType
 {
     Attack,
@@ -15,65 +15,6 @@ public enum CardTarget
     Enemy,
     AllEnemies,
     All
-}
-
-// Network-compatible simple card data
-// This is a struct (value type) which is easier to network
-[Serializable]
-public struct NetworkedCardData
-{
-    public string Name;
-    public string Description;
-    public int EnergyCost;
-    public int CardType; // Stored as int for networking
-    public int CardTarget; // Stored as int for networking
-    public int DamageAmount;
-    public int BlockAmount;
-    public int HealAmount;
-    public int DrawAmount;
-    public int EnergyGain;
-    public bool Exhaust;
-    public bool Ethereal;
-    
-    // Conversion helper
-    public static NetworkedCardData FromCardData(CardData card)
-    {
-        return new NetworkedCardData
-        {
-            Name = card.Name,
-            Description = card.Description,
-            EnergyCost = card.EnergyCost,
-            CardType = (int)card.Type,
-            CardTarget = (int)card.Target,
-            DamageAmount = card.DamageAmount,
-            BlockAmount = card.BlockAmount,
-            HealAmount = card.HealAmount,
-            DrawAmount = card.DrawAmount,
-            EnergyGain = card.EnergyGain,
-            Exhaust = card.Exhaust,
-            Ethereal = card.Ethereal
-        };
-    }
-    
-    // Convert back to CardData
-    public CardData ToCardData()
-    {
-        return new CardData
-        {
-            Name = Name,
-            Description = Description,
-            EnergyCost = EnergyCost,
-            Type = (CardType)CardType,
-            Target = (CardTarget)CardTarget,
-            DamageAmount = DamageAmount,
-            BlockAmount = BlockAmount,
-            HealAmount = HealAmount,
-            DrawAmount = DrawAmount,
-            EnergyGain = EnergyGain,
-            Exhaust = Exhaust,
-            Ethereal = Ethereal
-        };
-    }
 }
 
 // Full card data for gameplay - not sent directly over network
