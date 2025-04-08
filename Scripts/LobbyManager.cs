@@ -355,10 +355,19 @@ public class LobbyManager : NetworkBehaviour
             
         // Trigger the game started event
         GameManager.Instance.LogManager.LogMessage("GAME STARTING NOW!");
+        
+        // Notify all clients that the game has started
+        RPC_TriggerGameStart();
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_TriggerGameStart()
+    {
+        // Invoke the game started event for all clients
         OnGameStarted?.Invoke();
         
-        // For now, we just signal that the game has started
-        // Gameplay implementation will be added later
+        // Let GameManager know the game has started
+        GameManager.Instance.StartGame();
     }
     
     public float GetCurrentCountdown()
@@ -417,6 +426,11 @@ public class LobbyManager : NetworkBehaviour
         }
     }
     
+    public Dictionary<string, PlayerRef> GetPlayerRefsByName()
+    {
+        return new Dictionary<string, PlayerRef>(_playersByName);
+    }
+    
     public void Reset()
     {
         _playersByName.Clear();
@@ -454,13 +468,4 @@ public class LobbyManager : NetworkBehaviour
         GameManager.Instance.LogManager.LogMessage($"Game started: {IsGameStarted()}");
         GameManager.Instance.LogManager.LogMessage("-------------------------------");
     }
-}
-
-// Class to store player data for rejoining
-[System.Serializable]
-public class PlayerData
-{
-    public Vector3 Position = Vector3.zero; // Changed to Vector3 for 3D
-    public Color PlayerColor = Color.white;
-    // Add any other player state that needs to be preserved
 }

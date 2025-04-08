@@ -1,0 +1,393 @@
+using System;
+using System.Collections.Generic;
+using Fusion;
+using UnityEngine;
+
+// This class handles player-specific state within the game
+public class PlayerState : NetworkBehaviour
+{
+    // Stats (networked)
+    [Networked] public int Health { get; private set; }
+    [Networked] public int MaxHealth { get; private set; }
+    [Networked] public int Energy { get; private set; }
+    [Networked] public int MaxEnergy { get; private set; }
+    [Networked] public int Score { get; private set; }
+    [Networked] public NetworkString<_32> PlayerName { get; private set; }
+
+    // References
+    private Monster _playerMonster;
+    private Monster _opponentMonster;
+    
+    // Card collections
+    private List<CardData> _deck = new List<CardData>();
+    private List<CardData> _hand = new List<CardData>();
+    private List<CardData> _discardPile = new List<CardData>();
+    
+    // Events
+    public static event Action<PlayerState> OnStatsChanged;
+    public static event Action<PlayerState, List<CardData>> OnHandChanged;
+
+    // Constants
+    private const int STARTING_HEALTH = 50;
+    private const int STARTING_ENERGY = 3;
+    private const int HAND_SIZE = 5;
+
+    public override void Spawned()
+    {
+        base.Spawned();
+        
+        if (HasStateAuthority)
+        {
+            // Initialize default stats
+            MaxHealth = STARTING_HEALTH;
+            Health = MaxHealth;
+            MaxEnergy = STARTING_ENERGY;
+            Energy = MaxEnergy;
+            Score = 0;
+            
+            // Get name from the Player component
+            Player playerComponent = GetComponent<Player>();
+            if (playerComponent != null)
+            {
+                PlayerName = playerComponent.GetPlayerName();
+            }
+            
+            // Initialize the player's monster
+            InitializeMonster();
+            
+            // Create starting deck
+            CreateStartingDeck();
+        }
+        
+        GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for {PlayerName}");
+        
+        // Register with GameState if available
+        if (Runner != null && Object != null && Object.HasInputAuthority)
+        {
+            if (GameState.Instance != null)
+                GameState.Instance.RegisterPlayer(Runner.LocalPlayer, this);
+        }
+    }
+
+    private void InitializeMonster()
+    {
+        // Create monster instance
+        _playerMonster = new Monster
+        {
+            Name = $"{PlayerName}'s Monster",
+            Health = 40,
+            MaxHealth = 40,
+            Attack = 5,
+            Defense = 3
+        };
+        
+        GameManager.Instance.LogManager.LogMessage($"Monster initialized for {PlayerName}");
+    }
+
+    private void CreateStartingDeck()
+    {
+        // Create some basic starter cards
+        _deck.Clear();
+        
+        // Add basic attack cards
+        for (int i = 0; i < 5; i++)
+        {
+            _deck.Add(new CardData
+            {
+                Name = "Strike",
+                Description = "Deal 6 damage",
+                EnergyCost = 1,
+                Type = CardType.Attack,
+                Target = CardTarget.Enemy,
+                DamageAmount = 6
+            });
+        }
+        
+        // Add basic defense cards
+        for (int i = 0; i < 5; i++)
+        {
+            _deck.Add(new CardData
+            {
+                Name = "Defend",
+                Description = "Gain 5 block",
+                EnergyCost = 1,
+                Type = CardType.Skill,
+                Target = CardTarget.Self,
+                BlockAmount = 5
+            });
+        }
+        
+        // Add a couple special cards
+        _deck.Add(new CardData
+        {
+            Name = "Cleave",
+            Description = "Deal 8 damage to all enemies",
+            EnergyCost = 2,
+            Type = CardType.Attack,
+            Target = CardTarget.AllEnemies,
+            DamageAmount = 8
+        });
+        
+        _deck.Add(new CardData
+        {
+            Name = "Second Wind",
+            Description = "Gain 2 energy",
+            EnergyCost = 0,
+            Type = CardType.Skill,
+            Target = CardTarget.Self,
+            EnergyGain = 2
+        });
+        
+        // Shuffle the deck
+        ShuffleDeck();
+        
+        GameManager.Instance.LogManager.LogMessage($"Starting deck created for {PlayerName} with {_deck.Count} cards");
+    }
+
+    private void ShuffleDeck()
+    {
+        int n = _deck.Count;
+        while (n > 1)
+        {
+            n--;
+            int k = UnityEngine.Random.Range(0, n + 1);
+            CardData temp = _deck[k];
+            _deck[k] = _deck[n];
+            _deck[n] = temp;
+        }
+    }
+
+    public void DrawInitialHand()
+    {
+        if (HasStateAuthority)
+        {
+            _hand.Clear();
+            
+            // Draw starting hand
+            for (int i = 0; i < HAND_SIZE; i++)
+            {
+                DrawCard();
+            }
+            
+            // Convert cards to network-friendly format and notify clients
+            var networkedCards = new NetworkedCardData[_hand.Count];
+            for (int i = 0; i < _hand.Count; i++)
+            {
+                networkedCards[i] = NetworkedCardData.FromCardData(_hand[i]);
+            }
+            
+            RPC_UpdateHand(networkedCards);
+        }
+    }
+
+    private void DrawCard()
+    {
+        if (_deck.Count == 0)
+        {
+            // Shuffle discard into deck if empty
+            _deck.AddRange(_discardPile);
+            _discardPile.Clear();
+            ShuffleDeck();
+            
+            if (_deck.Count == 0)
+            {
+                // If still empty, no cards to draw
+                return;
+            }
+        }
+        
+        // Draw from the top
+        CardData drawnCard = _deck[0];
+        _deck.RemoveAt(0);
+        _hand.Add(drawnCard);
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_UpdateHand(NetworkedCardData[] networkedCards)
+    {
+        _hand.Clear();
+        
+        // Convert back to full CardData objects
+        foreach (var networkedCard in networkedCards)
+        {
+            _hand.Add(networkedCard.ToCardData());
+        }
+        
+        OnHandChanged?.Invoke(this, _hand);
+        GameManager.Instance.LogManager.LogMessage($"Hand updated for {PlayerName} with {_hand.Count} cards");
+    }
+
+    public void PlayCard(int cardIndex, Monster target)
+    {
+        if (!HasStateAuthority || cardIndex < 0 || cardIndex >= _hand.Count) return;
+        
+        CardData card = _hand[cardIndex];
+        
+        // Check if enough energy
+        if (Energy < card.EnergyCost)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Not enough energy to play {card.Name}");
+            return;
+        }
+        
+        // Handle card effects based on type and target
+        bool cardPlayed = false;
+        
+        switch (card.Target)
+        {
+            case CardTarget.Enemy:
+                if (target != null)
+                {
+                    // Apply damage
+                    if (card.DamageAmount > 0)
+                    {
+                        target.TakeDamage(card.DamageAmount);
+                    }
+                    cardPlayed = true;
+                }
+                break;
+                
+            case CardTarget.Self:
+                // Apply self effects
+                if (card.BlockAmount > 0)
+                {
+                    // Add block (implement this if we add a block system)
+                }
+                
+                if (card.HealAmount > 0)
+                {
+                    ModifyHealth(card.HealAmount);
+                }
+                
+                if (card.EnergyGain > 0)
+                {
+                    ModifyEnergy(card.EnergyGain);
+                }
+                
+                cardPlayed = true;
+                break;
+                
+            case CardTarget.AllEnemies:
+                // Apply to all enemies (currently just one)
+                if (target != null && card.DamageAmount > 0)
+                {
+                    target.TakeDamage(card.DamageAmount);
+                }
+                cardPlayed = true;
+                break;
+        }
+        
+        if (cardPlayed)
+        {
+            // Remove the card from hand and add to discard
+            _hand.RemoveAt(cardIndex);
+            _discardPile.Add(card);
+            
+            // Use energy
+            ModifyEnergy(-card.EnergyCost);
+            
+            // Convert remaining cards to network-friendly format and update clients
+            var networkedCards = new NetworkedCardData[_hand.Count];
+            for (int i = 0; i < _hand.Count; i++)
+            {
+                networkedCards[i] = NetworkedCardData.FromCardData(_hand[i]);
+            }
+            
+            RPC_UpdateHand(networkedCards);
+            
+            GameManager.Instance.LogManager.LogMessage($"{PlayerName} played {card.Name}");
+        }
+    }
+
+    public void SetOpponentMonster(Monster monster)
+    {
+        _opponentMonster = monster;
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} now fighting against {monster.Name}");
+    }
+
+    public Monster GetMonster()
+    {
+        return _playerMonster;
+    }
+
+    public Monster GetOpponentMonster()
+    {
+        return _opponentMonster;
+    }
+
+    public void ModifyHealth(int amount)
+    {
+        if (!HasStateAuthority) return;
+        
+        Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
+        OnStatsChanged?.Invoke(this);
+        
+        if (Health <= 0)
+        {
+            GameManager.Instance.LogManager.LogMessage($"{PlayerName} has been defeated!");
+            // Handle player defeat
+        }
+    }
+
+    public void ModifyEnergy(int amount)
+    {
+        if (!HasStateAuthority) return;
+        
+        Energy = Mathf.Clamp(Energy + amount, 0, MaxEnergy);
+        OnStatsChanged?.Invoke(this);
+    }
+
+    public void IncreaseScore()
+    {
+        if (!HasStateAuthority) return;
+        
+        Score++;
+        OnStatsChanged?.Invoke(this);
+        
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} score increased to {Score}");
+    }
+
+    public int GetScore()
+    {
+        return Score;
+    }
+
+    public void PrepareForNewRound()
+    {
+        if (!HasStateAuthority) return;
+        
+        // Reset energy
+        Energy = MaxEnergy;
+        
+        // Discard hand and draw new cards
+        _discardPile.AddRange(_hand);
+        _hand.Clear();
+        
+        // Draw new hand
+        DrawInitialHand();
+        
+        // Reset any round-specific stats or effects
+        
+        OnStatsChanged?.Invoke(this);
+        
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} ready for new round");
+    }
+
+    public void EndTurn()
+    {
+        if (!HasStateAuthority) return;
+        
+        // Process end of turn effects
+        
+        // Request next turn
+        if (GameState.Instance != null)
+            GameState.Instance.NextTurn();
+        
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} ended their turn");
+    }
+
+    public List<CardData> GetHand()
+    {
+        return new List<CardData>(_hand);
+    }
+}

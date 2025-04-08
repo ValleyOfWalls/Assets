@@ -12,6 +12,10 @@ public class GameManager : MonoBehaviour
     [HideInInspector] public PlayerManager PlayerManager { get; private set; }
     [HideInInspector] public CameraManager CameraManager { get; private set; }
     [HideInInspector] public LobbyManager LobbyManager { get; private set; }
+    [HideInInspector] public GameInitializer GameInitializer { get; private set; }
+
+    // Game state
+    private bool _gameStarted = false;
 
     private void Awake()
     {
@@ -33,6 +37,7 @@ public class GameManager : MonoBehaviour
         CameraManager = gameObject.AddComponent<CameraManager>();
         LobbyManager = gameObject.AddComponent<LobbyManager>();
         UIManager = gameObject.AddComponent<UIManager>();
+        GameInitializer = gameObject.AddComponent<GameInitializer>();
         
         // Log initial message
         LogManager.LogMessage("GameManager initialized successfully");
@@ -64,8 +69,50 @@ public class GameManager : MonoBehaviour
     // Handle game state transitions
     public void StartGame()
     {
+        if (_gameStarted)
+            return;
+            
         LogManager.LogMessage("Game is starting!");
-        // Game state setup will go here once implemented
+        
+        // Set game started flag
+        _gameStarted = true;
+        
+        // Initialize game systems through the GameInitializer
+        GameInitializer.InitializeGame();
+        
+        // Start the actual gameplay
+        GameInitializer.StartGameplay();
+    }
+    
+    public bool IsGameStarted()
+    {
+        return _gameStarted;
+    }
+    
+    public void EndGame()
+    {
+        if (!_gameStarted)
+            return;
+            
+        LogManager.LogMessage("Game is ending!");
+        
+        // Reset game state
+        _gameStarted = false;
+        
+        // Clean up game systems
+        GameInitializer.CleanupGame();
+        
+        // Return to lobby state
+        if (LobbyManager != null)
+        {
+            LobbyManager.Reset();
+        }
+        
+        // Show lobby UI
+        if (UIManager != null)
+        {
+            UIManager.ShowConnectUI();
+        }
     }
 
     private void OnDestroy()
