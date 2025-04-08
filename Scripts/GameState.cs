@@ -36,10 +36,45 @@ public class GameState : NetworkBehaviour
     // Card collections
     private List<CardData> _draftPool = new List<CardData>();
 
+    // Called when the component is first initialized
+    private void Awake()
+    {
+        // Set instance in Awake to make sure it's available early
+        SetupSingleton();
+    }
+
+    // Also set the instance in OnEnable for redundancy
+    private void OnEnable()
+    {
+        SetupSingleton();
+    }
+
+    // Set up the singleton instance
+    private void SetupSingleton()
+    {
+        if (_instance == null)
+        {
+            _instance = this;
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            {
+                GameManager.Instance.LogManager.LogMessage("GameState singleton instance set");
+            }
+        }
+        else if (_instance != this)
+        {
+            if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
+            {
+                GameManager.Instance.LogManager.LogMessage("Multiple GameState instances detected!");
+            }
+        }
+    }
+
     public override void Spawned()
     {
         base.Spawned();
-        _instance = this;
+        
+        // Ensure instance is set when spawned on the network
+        SetupSingleton();
         
         if (HasStateAuthority)
         {
@@ -305,6 +340,7 @@ public class GameState : NetworkBehaviour
         if (_instance == this)
         {
             _instance = null;
+            GameManager.Instance.LogManager.LogMessage("GameState instance cleared on despawn");
         }
     }
 }

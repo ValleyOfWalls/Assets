@@ -351,18 +351,46 @@ public class LobbyManager : NetworkBehaviour
     private void StartGame()
     {
         if (!IsGameStarted())
+        {
+            GameManager.Instance.LogManager.LogError("StartGame called but IsGameStarted() returned false");
             return;
+        }
             
         // Trigger the game started event
         GameManager.Instance.LogManager.LogMessage("GAME STARTING NOW!");
         
-        // Notify all clients that the game has started
-        RPC_TriggerGameStart();
+        // Ensure we're properly initialized for an RPC
+        if (!_hasBeenSpawned)
+        {
+            GameManager.Instance.LogManager.LogMessage("StartGame called before spawned, will trigger locally");
+            
+            // Directly notify listeners since we can't use an RPC
+            OnGameStarted?.Invoke();
+            
+            // Let GameManager know the game has started
+            GameManager.Instance.StartGame();
+        }
+        else
+        {
+            // Notify all clients that the game has started
+            if (HasStateAuthority)
+            {
+                GameManager.Instance.LogManager.LogMessage("Sending RPC_TriggerGameStart to all clients");
+                RPC_TriggerGameStart();
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogMessage("Not state authority, cannot send RPC_TriggerGameStart");
+            }
+        }
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_TriggerGameStart()
     {
+        // Log receipt of RPC
+        GameManager.Instance.LogManager.LogMessage("RPC_TriggerGameStart received");
+        
         // Invoke the game started event for all clients
         OnGameStarted?.Invoke();
         

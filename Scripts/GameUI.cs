@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using Fusion;  // Added Fusion namespace for PlayerRef
+using System.Collections; // Added for coroutines
 
 public class GameUI : MonoBehaviour
 {
@@ -35,51 +36,80 @@ public class GameUI : MonoBehaviour
     private MonsterDisplay _opponentMonsterDisplay;
     
     private bool _initialized = false;
+    private bool _initializationInProgress = false;
+    private float _initRetryInterval = 0.5f; // Retry every half second
+    private int _maxInitRetries = 10; // Maximum number of retries
 
     public void Initialize()
     {
-        if (_initialized) return;
+        if (_initialized || _initializationInProgress) return;
         
-        GameManager.Instance.LogManager.LogMessage("Initializing GameUI");
+        GameManager.Instance.LogManager.LogMessage("Starting GameUI initialization");
         
-        // Wait for GameState to be available
-        if (GameState.Instance == null)
+        // Start initialization process with retries
+        StartCoroutine(InitializeWithRetry());
+    }
+
+    private IEnumerator InitializeWithRetry()
+    {
+        _initializationInProgress = true;
+        int retryCount = 0;
+        
+        while (retryCount < _maxInitRetries)
         {
-            GameManager.Instance.LogManager.LogMessage("GameState not available, deferring GameUI initialization");
-            return;
+            // Wait for GameState to be available
+            if (GameState.Instance == null)
+            {
+                GameManager.Instance.LogManager.LogMessage($"GameState not available, retrying ({retryCount+1}/{_maxInitRetries})");
+                retryCount++;
+                yield return new WaitForSeconds(_initRetryInterval);
+                continue;
+            }
+            
+            // Get local player state
+            _localPlayerState = GameState.Instance.GetLocalPlayerState();
+            if (_localPlayerState == null)
+            {
+                GameManager.Instance.LogManager.LogMessage($"LocalPlayerState not available, retrying ({retryCount+1}/{_maxInitRetries})");
+                retryCount++;
+                yield return new WaitForSeconds(_initRetryInterval);
+                continue;
+            }
+            
+            // If we got here, we can initialize
+            GameManager.Instance.LogManager.LogMessage("GameState and LocalPlayerState available, proceeding with initialization");
+            
+            // Create UI
+            CreateMainCanvas();
+            CreateHandArea();
+            CreatePlayerStatsPanel();
+            CreateOpponentsPanel();
+            CreateMonsterDisplays();
+            CreateRoundInfoPanel();
+            CreateEndTurnButton();
+            
+            // Subscribe to events
+            PlayerState.OnStatsChanged += UpdatePlayerStats;
+            PlayerState.OnHandChanged += UpdateHand;
+            GameState.OnRoundChanged += UpdateRoundInfo;
+            GameState.OnTurnChanged += UpdateTurnInfo;
+            
+            _initialized = true;
+            _initializationInProgress = false;
+            GameManager.Instance.LogManager.LogMessage("GameUI fully initialized");
+            
+            // Hide lobby UI - IMPORTANT: This needs to happen before updating UI
+            HideLobbyUI();
+            
+            // Initial UI update
+            UpdateAllUI();
+            
+            yield break; // Successful initialization, exit coroutine
         }
         
-        // Get local player state
-        _localPlayerState = GameState.Instance.GetLocalPlayerState();
-        if (_localPlayerState == null)
-        {
-            GameManager.Instance.LogManager.LogMessage("LocalPlayerState not available, deferring GameUI initialization");
-            return;
-        }
-        
-        // Create UI
-        CreateMainCanvas();
-        CreateHandArea();
-        CreatePlayerStatsPanel();
-        CreateOpponentsPanel();
-        CreateMonsterDisplays();
-        CreateRoundInfoPanel();
-        CreateEndTurnButton();
-        
-        // Subscribe to events
-        PlayerState.OnStatsChanged += UpdatePlayerStats;
-        PlayerState.OnHandChanged += UpdateHand;
-        GameState.OnRoundChanged += UpdateRoundInfo;
-        GameState.OnTurnChanged += UpdateTurnInfo;
-        
-        _initialized = true;
-        GameManager.Instance.LogManager.LogMessage("GameUI initialized");
-        
-        // Hide lobby UI
-        HideLobbyUI();
-        
-        // Initial UI update
-        UpdateAllUI();
+        // If we get here, initialization failed after max retries
+        GameManager.Instance.LogManager.LogError("Failed to initialize GameUI after maximum retries");
+        _initializationInProgress = false;
     }
 
     private void CreateMainCanvas()
@@ -209,11 +239,23 @@ public class GameUI : MonoBehaviour
         Image bg = _statsPanel.AddComponent<Image>();
         bg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
         
-        // Player name
+        // Player name - safely get name to avoid errors with networked properties
         GameObject nameObj = new GameObject("PlayerName");
         nameObj.transform.SetParent(_statsPanel.transform, false);
         TMP_Text nameText = nameObj.AddComponent<TextMeshProUGUI>();
-        nameText.text = _localPlayerState.PlayerName.ToString();
+        
+        // Safely get player name or use default
+        string playerName = "Player";
+        try {
+            if (_localPlayerState != null) {
+                playerName = _localPlayerState.PlayerName.ToString();
+            }
+        }
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Could not access PlayerName: {ex.Message}. Using default name.");
+        }
+        
+        nameText.text = playerName;
         nameText.fontSize = 18;
         nameText.color = Color.white;
         nameText.alignment = TextAlignmentOptions.Center;
@@ -394,12 +436,8 @@ public class GameUI : MonoBehaviour
         vsRect.offsetMin = Vector2.zero;
         vsRect.offsetMax = Vector2.zero;
         
-        // Initialize the monster displays
-        if (_localPlayerState != null)
-        {
-            _playerMonsterDisplay.SetMonster(_localPlayerState.GetMonster());
-            _opponentMonsterDisplay.SetMonster(_localPlayerState.GetOpponentMonster());
-        }
+        // Initialize the monster displays with default monsters (to be safe)
+        UpdateMonsterDisplays();
         
         GameManager.Instance.LogManager.LogMessage("Monster displays created");
     }
@@ -506,11 +544,8 @@ public class GameUI : MonoBehaviour
         var uiManager = GameManager.Instance.UIManager;
         if (uiManager != null)
         {
-            // Hide connection panel if visible
-            uiManager.ShowConnectUI();
-            
-            // We'll keep the lobby UI components but hide them
-            // This way they can be restored when the game ends
+            // FIXED: Don't call ShowConnectUI, instead directly hide both panels
+            // Find the canvas
             Transform canvas = uiManager.transform.Find("UI Canvas");
             if (canvas != null)
             {
@@ -518,13 +553,27 @@ public class GameUI : MonoBehaviour
                 if (lobbyPanel != null)
                 {
                     lobbyPanel.gameObject.SetActive(false);
+                    GameManager.Instance.LogManager.LogMessage("Lobby panel hidden");
                 }
                 
                 Transform connectPanel = canvas.Find("Connect Panel");
                 if (connectPanel != null)
                 {
                     connectPanel.gameObject.SetActive(false);
+                    GameManager.Instance.LogManager.LogMessage("Connect panel hidden");
                 }
+                
+                // Also hide game started panel if it exists
+                Transform gameStartedPanel = canvas.Find("Game Started Panel");
+                if (gameStartedPanel != null)
+                {
+                    gameStartedPanel.gameObject.SetActive(false);
+                    GameManager.Instance.LogManager.LogMessage("Game started panel hidden");
+                }
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogError("UI Canvas not found!");
             }
             
             GameManager.Instance.LogManager.LogMessage("Lobby UI hidden");
@@ -533,35 +582,53 @@ public class GameUI : MonoBehaviour
 
     private void UpdateAllUI()
     {
-        // Update all UI elements
-        UpdatePlayerStats(_localPlayerState);
-        UpdateHand(_localPlayerState, _localPlayerState.GetHand());
-        UpdateOpponentDisplays();
-        UpdateMonsterDisplays();
-        UpdateRoundInfo(GameState.Instance.CurrentRound);
-        UpdateTurnInfo(GameState.Instance.CurrentTurnPlayerIndex);
+        try {
+            // Update all UI elements
+            UpdatePlayerStats(_localPlayerState);
+            UpdateHand(_localPlayerState, _localPlayerState.GetHand());
+            UpdateOpponentDisplays();
+            UpdateMonsterDisplays();
+            
+            if (GameState.Instance != null) {
+                UpdateRoundInfo(GameState.Instance.CurrentRound);
+                UpdateTurnInfo(GameState.Instance.CurrentTurnPlayerIndex);
+            }
+        }
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error updating UI: {ex.Message}");
+        }
     }
 
     private void UpdatePlayerStats(PlayerState playerState)
     {
         if (playerState != _localPlayerState) return;
         
-        // Update health
-        if (_healthText != null)
-        {
-            _healthText.text = $"Health: {playerState.Health}/{playerState.MaxHealth}";
-        }
-        
-        // Update energy
-        if (_energyText != null)
-        {
-            _energyText.text = $"Energy: {playerState.Energy}/{playerState.MaxEnergy}";
-        }
-        
-        // Update score
-        if (_scoreText != null)
-        {
-            _scoreText.text = $"Score: {playerState.GetScore()}";
+        try {
+            // Update health
+            if (_healthText != null)
+            {
+                _healthText.text = $"Health: {playerState.Health}/{playerState.MaxHealth}";
+            }
+            
+            // Update energy
+            if (_energyText != null)
+            {
+                _energyText.text = $"Energy: {playerState.Energy}/{playerState.MaxEnergy}";
+            }
+            
+            // Update score
+            if (_scoreText != null)
+            {
+                _scoreText.text = $"Score: {playerState.GetScore()}";
+            }
+        } 
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error updating player stats: {ex.Message}");
+            
+            // Default values
+            if (_healthText != null) _healthText.text = "Health: 50/50";
+            if (_energyText != null) _energyText.text = "Energy: 3/3";
+            if (_scoreText != null) _scoreText.text = "Score: 0";
         }
     }
 
@@ -615,55 +682,105 @@ public class GameUI : MonoBehaviour
 
     private void UpdateOpponentDisplays()
     {
-        // Get all player states
-        var playerStates = GameState.Instance.GetAllPlayerStates();
-        PlayerRef localPlayerRef = GameState.Instance.GetLocalPlayerRef();
-        
-        // Clear existing displays
-        foreach (var display in _opponentDisplays.Values)
-        {
-            if (display != null && display.gameObject != null)
+        try {
+            // Get all player states
+            var playerStates = GameState.Instance?.GetAllPlayerStates();
+            if (playerStates == null) return;
+            
+            PlayerRef localPlayerRef = GameState.Instance.GetLocalPlayerRef();
+            
+            // Clear existing displays
+            foreach (var display in _opponentDisplays.Values)
             {
-                Destroy(display.gameObject);
+                if (display != null && display.gameObject != null)
+                {
+                    Destroy(display.gameObject);
+                }
             }
-        }
-        _opponentDisplays.Clear();
-        
-        // Create display for each opponent
-        foreach (var entry in playerStates)
-        {
-            if (entry.Key != localPlayerRef)
+            _opponentDisplays.Clear();
+            
+            // Create display for each opponent
+            foreach (var entry in playerStates)
             {
-                // Create opponent display
-                GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
-                opponentObj.SetActive(true);
-                
-                // Set data
-                OpponentStatsDisplay display = opponentObj.GetComponent<OpponentStatsDisplay>();
-                display.UpdateDisplay(entry.Value);
-                
-                // Add to dictionary
-                _opponentDisplays.Add(entry.Key, display);
+                if (entry.Key != localPlayerRef)
+                {
+                    // Create opponent display
+                    GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
+                    opponentObj.SetActive(true);
+                    
+                    // Set data
+                    OpponentStatsDisplay display = opponentObj.GetComponent<OpponentStatsDisplay>();
+                    display.UpdateDisplay(entry.Value);
+                    
+                    // Add to dictionary
+                    _opponentDisplays.Add(entry.Key, display);
+                }
             }
+            
+            GameManager.Instance.LogManager.LogMessage($"Updated opponent displays for {_opponentDisplays.Count} opponents");
         }
-        
-        GameManager.Instance.LogManager.LogMessage($"Updated opponent displays for {_opponentDisplays.Count} opponents");
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error updating opponent displays: {ex.Message}");
+        }
     }
 
     private void UpdateMonsterDisplays()
     {
         if (_localPlayerState == null) return;
         
-        // Update player monster
-        if (_playerMonsterDisplay != null)
-        {
-            _playerMonsterDisplay.SetMonster(_localPlayerState.GetMonster());
+        try {
+            // Update player monster
+            Monster playerMonster = null;
+            try { 
+                playerMonster = _localPlayerState.GetMonster();
+            } catch (System.Exception) { }
+            
+            if (_playerMonsterDisplay != null && playerMonster != null)
+            {
+                _playerMonsterDisplay.SetMonster(playerMonster);
+            }
+            else if (_playerMonsterDisplay != null)
+            {
+                // Create default monster if needed
+                Monster defaultMonster = new Monster
+                {
+                    Name = "Player Monster",
+                    Health = 40,
+                    MaxHealth = 40,
+                    Attack = 5,
+                    Defense = 3,
+                    TintColor = Color.blue
+                };
+                _playerMonsterDisplay.SetMonster(defaultMonster);
+            }
+            
+            // Update opponent monster - similar approach with null checking
+            Monster opponentMonster = null;
+            try {
+                opponentMonster = _localPlayerState.GetOpponentMonster();
+            } catch (System.Exception) { }
+            
+            if (_opponentMonsterDisplay != null && opponentMonster != null)
+            {
+                _opponentMonsterDisplay.SetMonster(opponentMonster);
+            }
+            else if (_opponentMonsterDisplay != null)
+            {
+                // Create default opponent monster if needed
+                Monster defaultOpponent = new Monster
+                {
+                    Name = "Opponent Monster",
+                    Health = 40,
+                    MaxHealth = 40,
+                    Attack = 5,
+                    Defense = 3,
+                    TintColor = Color.red
+                };
+                _opponentMonsterDisplay.SetMonster(defaultOpponent);
+            }
         }
-        
-        // Update opponent monster
-        if (_opponentMonsterDisplay != null)
-        {
-            _opponentMonsterDisplay.SetMonster(_localPlayerState.GetOpponentMonster());
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error updating monster displays: {ex.Message}");
         }
     }
 
@@ -677,29 +794,41 @@ public class GameUI : MonoBehaviour
 
     private void UpdateTurnInfo(int turnPlayerIndex)
     {
-        if (_turnInfoText == null) return;
+        if (_turnInfoText == null || GameState.Instance == null) return;
         
-        bool isLocalPlayerTurn = GameState.Instance.IsLocalPlayerTurn();
-        
-        if (isLocalPlayerTurn)
-        {
-            _turnInfoText.text = "Your Turn";
-            _turnInfoText.color = Color.green;
+        try {
+            bool isLocalPlayerTurn = GameState.Instance.IsLocalPlayerTurn();
             
-            // Enable end turn button
-            if (_endTurnButton != null)
+            if (isLocalPlayerTurn)
             {
-                _endTurnButton.interactable = true;
+                _turnInfoText.text = "Your Turn";
+                _turnInfoText.color = Color.green;
+                
+                // Enable end turn button
+                if (_endTurnButton != null)
+                {
+                    _endTurnButton.interactable = true;
+                }
+            }
+            else
+            {
+                _turnInfoText.text = "Opponent's Turn";
+                _turnInfoText.color = Color.red;
+                
+                // Disable end turn button
+                if (_endTurnButton != null)
+                {
+                    _endTurnButton.interactable = false;
+                }
             }
         }
-        else
-        {
-            _turnInfoText.text = "Opponent's Turn";
-            _turnInfoText.color = Color.red;
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error updating turn info: {ex.Message}");
             
-            // Disable end turn button
-            if (_endTurnButton != null)
-            {
+            // Default to not player's turn when error occurs
+            _turnInfoText.text = "Waiting...";
+            _turnInfoText.color = Color.yellow;
+            if (_endTurnButton != null) {
                 _endTurnButton.interactable = false;
             }
         }
@@ -707,7 +836,7 @@ public class GameUI : MonoBehaviour
 
     private void OnCardClicked(CardDisplay display)
     {
-        if (!GameState.Instance.IsLocalPlayerTurn()) return;
+        if (GameState.Instance == null || !GameState.Instance.IsLocalPlayerTurn()) return;
         
         CardData card = display.GetCardData();
         int cardIndex = display.GetCardIndex();
@@ -729,23 +858,35 @@ public class GameUI : MonoBehaviour
         }
         
         // Play the card
-        _localPlayerState.PlayCard(cardIndex, target);
-        
-        GameManager.Instance.LogManager.LogMessage($"Card {card.Name} played against {(target != null ? target.Name : "self")}");
+        try {
+            _localPlayerState.PlayCard(cardIndex, target);
+            GameManager.Instance.LogManager.LogMessage($"Card {card.Name} played against {(target != null ? target.Name : "self")}");
+        }
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error playing card: {ex.Message}");
+        }
     }
 
     private void OnEndTurnClicked()
     {
-        if (!GameState.Instance.IsLocalPlayerTurn()) return;
+        if (GameState.Instance == null || !GameState.Instance.IsLocalPlayerTurn()) return;
         
-        _localPlayerState.EndTurn();
-        GameManager.Instance.LogManager.LogMessage("Player ended turn");
+        try {
+            _localPlayerState.EndTurn();
+            GameManager.Instance.LogManager.LogMessage("Player ended turn");
+        }
+        catch (System.Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error ending turn: {ex.Message}");
+        }
     }
 
     // Call this each frame to ensure the UI stays updated
     public void Update()
     {
-        if (!_initialized) Initialize();
+        if (!_initialized && !_initializationInProgress) 
+        {
+            Initialize();
+        }
     }
 
     private void OnDestroy()
