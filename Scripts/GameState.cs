@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using Fusion;
 using UnityEngine;
@@ -117,12 +118,22 @@ public class GameState : NetworkBehaviour
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage("Game starting on network!");
             
-            // Assign initial monster matchups
-            AssignMonsterMatchups();
-            
-            // Deal initial cards
-            DealInitialCards();
+            // Use coroutine with delay to ensure all players are properly initialized
+            StartCoroutine(DelayedMatchupAssignment());
         }
+    }
+
+    // New coroutine to delay matchup assignment
+    private IEnumerator DelayedMatchupAssignment()
+    {
+        // Wait a short time for all player states to initialize
+        yield return new WaitForSeconds(1.0f);
+        
+        // Assign initial monster matchups
+        AssignMonsterMatchups();
+        
+        // Deal initial cards
+        DealInitialCards();
     }
 
     private void AssignMonsterMatchups()
@@ -159,10 +170,33 @@ public class GameState : NetworkBehaviour
         if (_playerStates.TryGetValue(player, out PlayerState playerState) && 
             _playerStates.TryGetValue(monsterOwner, out PlayerState monsterState))
         {
-            playerState.SetOpponentMonster(monsterState.GetMonster());
+            Monster opponentMonster = monsterState.GetMonster();
+            if (opponentMonster == null)
+            {
+                if (GameManager.Instance != null)
+                    GameManager.Instance.LogManager.LogMessage($"Warning: Monster from player {monsterOwner} is null");
+                
+                // Create a temporary monster if needed
+                opponentMonster = new Monster
+                {
+                    Name = $"Temporary Monster",
+                    Health = 40,
+                    MaxHealth = 40,
+                    Attack = 5,
+                    Defense = 3,
+                    TintColor = Color.red
+                };
+            }
+            
+            playerState.SetOpponentMonster(opponentMonster);
             
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage($"Set monster matchup for player {player}");
+        }
+        else
+        {
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"Could not find player states for matchup between {player} and {monsterOwner}");
         }
     }
 

@@ -393,10 +393,17 @@ public class PlayerState : NetworkBehaviour
     }
 
     public void SetOpponentMonster(Monster monster)
+{
+    _opponentMonster = monster;
+    if (monster != null)
     {
-        _opponentMonster = monster;
         GameManager.Instance.LogManager.LogMessage($"{PlayerName} now fighting against {monster.Name}");
     }
+    else
+    {
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} has no opponent monster assigned yet");
+    }
+}
 
     public Monster GetMonster()
     {
