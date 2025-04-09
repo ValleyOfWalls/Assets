@@ -31,6 +31,9 @@ public class UIManager : MonoBehaviour
     // Dictionary to keep track of player list items in UI
     private Dictionary<string, GameObject> _playerListItems = new Dictionary<string, GameObject>();
     
+    // Flag to track if UI is active
+    private bool _isUIActive = true;
+    
     public void Initialize()
     {
         GameManager.Instance.LogManager.LogMessage("Initializing UIManager...");
@@ -314,7 +317,7 @@ public class UIManager : MonoBehaviour
         playerListTitleRect.offsetMin = Vector2.zero;
         playerListTitleRect.offsetMax = Vector2.zero;
         
-        // Add simple player list - DIRECT METHOD since ScrollRect is having issues
+        // Add simple player list
         GameObject playerListObj = new GameObject("Player List");
         playerListObj.transform.SetParent(lobbyPanelObj.transform, false);
         
@@ -383,38 +386,6 @@ public class UIManager : MonoBehaviour
         countdownRect.anchorMax = new Vector2(0.9f, 0.2f);
         countdownRect.offsetMin = Vector2.zero;
         countdownRect.offsetMax = Vector2.zero;
-        
-        GameManager.Instance.LogManager.LogMessage($"Player list content created: {_playerListContent != null}");
-    }
-    
-    private void CreateGameStartedPanel(GameObject parentCanvas)
-    {
-        // Create game started panel that overlays the center of the screen
-        GameObject gameStartedPanelObj = new GameObject("Game Started Panel");
-        gameStartedPanelObj.transform.SetParent(_uiCanvas.transform, false);
-        _gameStartedPanel = gameStartedPanelObj;
-        
-        Image gameStartedPanelImage = gameStartedPanelObj.AddComponent<Image>();
-        gameStartedPanelImage.color = new Color(0, 0, 0, 0.9f);
-        RectTransform gameStartedPanelRect = gameStartedPanelObj.GetComponent<RectTransform>();
-        gameStartedPanelRect.anchorMin = new Vector2(0.35f, 0.4f);
-        gameStartedPanelRect.anchorMax = new Vector2(0.65f, 0.6f);
-        gameStartedPanelRect.offsetMin = Vector2.zero;
-        gameStartedPanelRect.offsetMax = Vector2.zero;
-        
-        // Add game started text
-        GameObject gameStartedTextObj = new GameObject("Game Started Text");
-        gameStartedTextObj.transform.SetParent(gameStartedPanelObj.transform, false);
-        _gameStartedText = gameStartedTextObj.AddComponent<TextMeshProUGUI>();
-        _gameStartedText.text = "GAME STARTED!";
-        _gameStartedText.fontSize = 32;
-        _gameStartedText.alignment = TextAlignmentOptions.Center;
-        _gameStartedText.color = Color.green;
-        RectTransform gameStartedTextRect = gameStartedTextObj.GetComponent<RectTransform>();
-        gameStartedTextRect.anchorMin = Vector2.zero;
-        gameStartedTextRect.anchorMax = Vector2.one;
-        gameStartedTextRect.offsetMin = Vector2.zero;
-        gameStartedTextRect.offsetMax = Vector2.zero;
     }
     
     private GameObject CreatePlayerListItemPrefab()
@@ -463,6 +434,36 @@ public class UIManager : MonoBehaviour
         statusLayout.preferredWidth = 80;
         
         return itemObj;
+    }
+    
+    private void CreateGameStartedPanel(GameObject parentCanvas)
+    {
+        // Create game started panel that overlays the center of the screen
+        GameObject gameStartedPanelObj = new GameObject("Game Started Panel");
+        gameStartedPanelObj.transform.SetParent(_uiCanvas.transform, false);
+        _gameStartedPanel = gameStartedPanelObj;
+        
+        Image gameStartedPanelImage = gameStartedPanelObj.AddComponent<Image>();
+        gameStartedPanelImage.color = new Color(0, 0, 0, 0.9f);
+        RectTransform gameStartedPanelRect = gameStartedPanelObj.GetComponent<RectTransform>();
+        gameStartedPanelRect.anchorMin = new Vector2(0.35f, 0.4f);
+        gameStartedPanelRect.anchorMax = new Vector2(0.65f, 0.6f);
+        gameStartedPanelRect.offsetMin = Vector2.zero;
+        gameStartedPanelRect.offsetMax = Vector2.zero;
+        
+        // Add game started text
+        GameObject gameStartedTextObj = new GameObject("Game Started Text");
+        gameStartedTextObj.transform.SetParent(gameStartedPanelObj.transform, false);
+        _gameStartedText = gameStartedTextObj.AddComponent<TextMeshProUGUI>();
+        _gameStartedText.text = "GAME STARTED!";
+        _gameStartedText.fontSize = 32;
+        _gameStartedText.alignment = TextAlignmentOptions.Center;
+        _gameStartedText.color = Color.green;
+        RectTransform gameStartedTextRect = gameStartedTextObj.GetComponent<RectTransform>();
+        gameStartedTextRect.anchorMin = Vector2.zero;
+        gameStartedTextRect.anchorMax = Vector2.one;
+        gameStartedTextRect.offsetMin = Vector2.zero;
+        gameStartedTextRect.offsetMax = Vector2.zero;
     }
 
     private void SetupUIListeners()
@@ -591,28 +592,99 @@ public class UIManager : MonoBehaviour
     public void ShowConnectUI()
     {
         if (_connectPanel != null)
+        {
             _connectPanel.SetActive(true);
+            GameManager.Instance.LogManager.LogMessage("Connect panel shown");
+        }
         
         if (_lobbyPanel != null)
+        {
             _lobbyPanel.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Lobby panel hidden");
+        }
             
         if (_gameStartedPanel != null)
+        {
             _gameStartedPanel.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Game started panel hidden");
+        }
+        
+        _isUIActive = true;
     }
 
     public void HideConnectUI()
     {
         if (_connectPanel != null)
+        {
             _connectPanel.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Connect panel hidden");
+        }
         
         if (_lobbyPanel != null)
+        {
             _lobbyPanel.SetActive(true);
+            GameManager.Instance.LogManager.LogMessage("Lobby panel shown");
+        }
             
         if (_gameStartedPanel != null)
+        {
             _gameStartedPanel.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Game started panel hidden");
+        }
         
         // Update the room name in the lobby UI
         UpdateRoomInfo();
+        
+        _isUIActive = true;
+    }
+    
+    // New method to completely hide all UI
+    public void HideAllUI()
+    {
+        if (_connectPanel != null)
+        {
+            _connectPanel.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Connect panel forcibly hidden");
+        }
+        
+        if (_lobbyPanel != null)
+        {
+            _lobbyPanel.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Lobby panel forcibly hidden");
+        }
+            
+        if (_gameStartedPanel != null)
+        {
+            _gameStartedPanel.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Game started panel forcibly hidden");
+        }
+        
+        // Additionally, deactivate the entire canvas for lobby UI
+        if (_uiCanvas != null)
+        {
+            _uiCanvas.gameObject.SetActive(false);
+            GameManager.Instance.LogManager.LogMessage("Entire lobby UI canvas forcibly deactivated");
+        }
+        
+        _isUIActive = false;
+    }
+    
+    public void DestroyAllUI()
+    {
+        // Complete destruction of all UI elements
+        if (_uiCanvas != null)
+        {
+            Destroy(_uiCanvas.gameObject);
+            _uiCanvas = null;
+            GameManager.Instance.LogManager.LogMessage("Destroyed entire UI canvas");
+        }
+        
+        _connectPanel = null;
+        _lobbyPanel = null;
+        _gameStartedPanel = null;
+        _playerListContent = null;
+        _playerListItemPrefab = null;
+        _isUIActive = false;
     }
     
     public void UpdateStatus(string message)
@@ -625,6 +697,8 @@ public class UIManager : MonoBehaviour
     
     private void UpdateRoomInfo()
     {
+        if (_lobbyPanel == null) return;
+        
         var runner = GameManager.Instance.NetworkManager.GetRunner();
         if (runner != null && runner.SessionInfo != null)
         {
@@ -734,6 +808,7 @@ public class UIManager : MonoBehaviour
         GameManager.Instance.LogManager.LogMessage("Countdown complete event received in UI");
     }
     
+    // Method to handle the game started event
     private void HandleGameStarted()
     {
         GameManager.Instance.LogManager.LogMessage("Game started event received in UI");
@@ -743,9 +818,18 @@ public class UIManager : MonoBehaviour
         {
             _gameStartedPanel.SetActive(true);
             
-            // Hide the game started panel after 3 seconds
-            Invoke("HideGameStartedPanel", 3f);
+            // Hide all UI after 3 seconds
+            Invoke("HideAllUIDelayed", 2f);
+            
+            // Destroy all UI after 3 seconds
+            Invoke("DestroyAllUI", 3f);
         }
+    }
+    
+    // Delayed method to hide UI
+    private void HideAllUIDelayed()
+    {
+        HideAllUI();
     }
     
     private void HideGameStartedPanel()
@@ -764,6 +848,8 @@ public class UIManager : MonoBehaviour
     
     private void Update()
     {
+        if (!_isUIActive) return;
+        
         if (GameManager.Instance.LobbyManager != null && GameManager.Instance.LobbyManager.IsCountdownActive())
         {
             if (_countdownText != null)
@@ -777,5 +863,22 @@ public class UIManager : MonoBehaviour
     public string GetLocalPlayerName()
     {
         return _localPlayerName;
+    }
+    
+    public bool IsUIActive()
+    {
+        return _isUIActive;
+    }
+    
+    private void OnDestroy()
+    {
+        // Unsubscribe from events to prevent memory leaks
+        if (GameManager.Instance != null && GameManager.Instance.LobbyManager != null)
+        {
+            GameManager.Instance.LobbyManager.OnAllPlayersReady -= HandleAllPlayersReady;
+            GameManager.Instance.LobbyManager.OnCountdownComplete -= HandleCountdownComplete;
+            GameManager.Instance.LobbyManager.OnPlayerReadyStatusChanged -= HandlePlayerReadyStatusChanged;
+            GameManager.Instance.LobbyManager.OnGameStarted -= HandleGameStarted;
+        }
     }
 }

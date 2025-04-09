@@ -611,60 +611,54 @@ public class GameUI : MonoBehaviour
     }
 
     private void HideLobbyUI()
+{
+    // Hide the lobby UI elements when the game starts
+    var uiManager = GameManager.Instance.UIManager;
+    if (uiManager != null)
     {
-        // Hide the lobby UI elements when the game starts
-        var uiManager = GameManager.Instance.UIManager;
-        if (uiManager != null)
+        try
         {
-            try
+            // Force hide all UI through the UIManager - most direct approach
+            uiManager.HideAllUI();
+            GameManager.Instance.LogManager.LogMessage("Forced hiding of all lobby UI components");
+            
+            // Additionally, find and destroy all canvases starting with "UI Canvas" or "UI_Canvas"
+            // This is a more aggressive approach to ensure UI is gone
+            Canvas[] allCanvases = FindObjectsOfType<Canvas>();
+            foreach (Canvas canvas in allCanvases)
             {
-                // Find canvases in the scene
-                Canvas[] canvases = FindObjectsOfType<Canvas>();
-                foreach (Canvas canvas in canvases)
+                if (canvas.name.StartsWith("UI Canvas") || canvas.name.StartsWith("UI_Canvas"))
                 {
-                    // Look for lobby UI objects
-                    Transform lobbyPanel = canvas.transform.Find("Lobby Panel");
-                    if (lobbyPanel != null)
+                    if (canvas.gameObject != _gameCanvas.gameObject) // Don't destroy our game UI canvas
                     {
-                        lobbyPanel.gameObject.SetActive(false);
-                        GameManager.Instance.LogManager.LogMessage("Found and hidden lobby panel");
+                        GameManager.Instance.LogManager.LogMessage($"Destroying lobby UI canvas: {canvas.name}");
+                        Destroy(canvas.gameObject);
                     }
-                    
-                    Transform connectPanel = canvas.transform.Find("Connect Panel");
-                    if (connectPanel != null)
-                    {
-                        connectPanel.gameObject.SetActive(false);
-                        GameManager.Instance.LogManager.LogMessage("Found and hidden connect panel");
-                    }
-                    
-                    Transform gameStartedPanel = canvas.transform.Find("Game Started Panel");
-                    if (gameStartedPanel != null)
-                    {
-                        gameStartedPanel.gameObject.SetActive(false);
-                        GameManager.Instance.LogManager.LogMessage("Found and hidden game started panel");
-                    }
-                }
-                
-                // Direct approach to hide using UIManager
-                try
-                {
-                    // Call HideConnectUI to ensure lobby is hidden
-                    uiManager.HideConnectUI();
-                    GameManager.Instance.LogManager.LogMessage("Called UIManager.HideConnectUI directly");
-                }
-                catch (Exception ex)
-                {
-                    GameManager.Instance.LogManager.LogError($"Error calling HideConnectUI: {ex.Message}");
                 }
             }
-            catch (Exception ex)
+            
+            // Also try to find specific panels by name in the entire scene
+            GameObject[] allObjects = FindObjectsOfType<GameObject>();
+            foreach (GameObject obj in allObjects)
             {
-                GameManager.Instance.LogManager.LogError($"Error hiding lobby UI: {ex.Message}");
+                // Check for panels with typical lobby UI names
+                if (obj.name == "Lobby Panel" || obj.name == "Connect Panel" || 
+                    obj.name == "Game Started Panel" || obj.name == "LobbyPanel" || 
+                    obj.name == "ConnectPanel")
+                {
+                    GameManager.Instance.LogManager.LogMessage($"Found and destroying panel: {obj.name}");
+                    Destroy(obj);
+                }
             }
         }
+        catch (System.Exception ex)
+        {
+            GameManager.Instance.LogManager.LogError($"Error hiding lobby UI: {ex.Message}");
+        }
         
-        GameManager.Instance.LogManager.LogMessage("Lobby UI hiding procedure completed");
+        GameManager.Instance.LogManager.LogMessage("Lobby UI complete destruction procedure completed");
     }
+}
 
     private void UpdateAllUI()
     {
@@ -986,4 +980,8 @@ public class GameUI : MonoBehaviour
         GameState.OnRoundChanged -= UpdateRoundInfo;
         GameState.OnTurnChanged -= UpdateTurnInfo;
     }
+
+    // Add this method to your existing GameUI.cs file
+
+
 }

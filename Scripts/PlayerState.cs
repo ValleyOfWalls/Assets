@@ -14,11 +14,15 @@ public class PlayerState : NetworkBehaviour
     [Networked] public int Score { get; private set; }
     [Networked] public NetworkString<_32> PlayerName { get; private set; }
 
+    // Hand cards - modified to use networked properties instead of RPCs
+    [Networked, Capacity(10)]
+    private NetworkArray<NetworkedCardData> _networkedHand { get; }
+
     // References
     private Monster _playerMonster;
     private Monster _opponentMonster;
     
-    // Card collections
+    // Local card collections
     private List<CardData> _deck = new List<CardData>();
     private List<CardData> _hand = new List<CardData>();
     private List<CardData> _discardPile = new List<CardData>();
@@ -31,6 +35,10 @@ public class PlayerState : NetworkBehaviour
     private const int STARTING_HEALTH = 50;
     private const int STARTING_ENERGY = 3;
     private const int HAND_SIZE = 5;
+    private const int MAX_HAND_SIZE = 10;
+
+    // Change detector
+    private ChangeDetector _changeDetector;
 
     public override void Spawned()
     {
@@ -77,6 +85,9 @@ public class PlayerState : NetworkBehaviour
             CreateStartingDeck();
         }
         
+        // Initialize change detector for networked properties
+        _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState);
+        
         GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for {PlayerName}");
         
         // Attempt to register with GameState if available, otherwise schedule for later
@@ -84,6 +95,40 @@ public class PlayerState : NetworkBehaviour
         
         // Start a coroutine to keep trying to register with GameState if it's not available yet
         StartCoroutine(RegisterWithGameStateWhenAvailable());
+    }
+
+    public override void Render()
+    {
+        base.Render();
+        
+        // Check for changes in the networked hand
+        foreach (var change in _changeDetector.DetectChanges(this))
+        {
+            if (change == nameof(_networkedHand))
+            {
+                UpdateLocalHandFromNetworked();
+            }
+        }
+    }
+
+    // Update local hand from networked data
+    private void UpdateLocalHandFromNetworked()
+    {
+        _hand.Clear();
+        
+        // Convert networked data to local card data
+        for (int i = 0; i < _networkedHand.Length; i++)
+        {
+            // Skip default/empty cards
+            if (string.IsNullOrEmpty(_networkedHand[i].Name.ToString()))
+                continue;
+                
+            _hand.Add(_networkedHand[i].ToCardData());
+        }
+        
+        // Notify UI
+        OnHandChanged?.Invoke(this, _hand);
+        GameManager.Instance.LogManager.LogMessage($"Hand updated for {PlayerName} with {_hand.Count} cards");
     }
 
     // New method - Try to register with GameState
@@ -226,14 +271,26 @@ public class PlayerState : NetworkBehaviour
                 DrawCard();
             }
             
-            // Convert cards to network-friendly format and notify clients
-            var networkedCards = new NetworkedCardData[_hand.Count];
-            for (int i = 0; i < _hand.Count; i++)
-            {
-                networkedCards[i] = NetworkedCardData.FromCardData(_hand[i]);
-            }
-            
-            RPC_UpdateHand(networkedCards);
+            // Update networked hand directly
+            UpdateNetworkedHand();
+        }
+    }
+
+    // Update networked hand from local hand
+    private void UpdateNetworkedHand()
+    {
+        if (!HasStateAuthority) return;
+        
+        // Clear networked hand by filling with default values
+        for (int i = 0; i < _networkedHand.Length; i++)
+        {
+            _networkedHand.Set(i, default);
+        }
+        
+        // Update networked hand with current local hand
+        for (int i = 0; i < _hand.Count && i < MAX_HAND_SIZE; i++)
+        {
+            _networkedHand.Set(i, NetworkedCardData.FromCardData(_hand[i]));
         }
     }
 
@@ -257,21 +314,6 @@ public class PlayerState : NetworkBehaviour
         CardData drawnCard = _deck[0];
         _deck.RemoveAt(0);
         _hand.Add(drawnCard);
-    }
-
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_UpdateHand(NetworkedCardData[] networkedCards)
-    {
-        _hand.Clear();
-        
-        // Convert back to full CardData objects
-        foreach (var networkedCard in networkedCards)
-        {
-            _hand.Add(networkedCard.ToCardData());
-        }
-        
-        OnHandChanged?.Invoke(this, _hand);
-        GameManager.Instance.LogManager.LogMessage($"Hand updated for {PlayerName} with {_hand.Count} cards");
     }
 
     public void PlayCard(int cardIndex, Monster target)
@@ -343,14 +385,8 @@ public class PlayerState : NetworkBehaviour
             // Use energy
             ModifyEnergy(-card.EnergyCost);
             
-            // Convert remaining cards to network-friendly format and update clients
-            var networkedCards = new NetworkedCardData[_hand.Count];
-            for (int i = 0; i < _hand.Count; i++)
-            {
-                networkedCards[i] = NetworkedCardData.FromCardData(_hand[i]);
-            }
-            
-            RPC_UpdateHand(networkedCards);
+            // Update networked hand
+            UpdateNetworkedHand();
             
             GameManager.Instance.LogManager.LogMessage($"{PlayerName} played {card.Name}");
         }
