@@ -167,6 +167,58 @@ public class PlayerState : NetworkBehaviour
         UpdateOpponentMonsterFromState();
     }
 
+    // MODIFIED: Changed to handle non-authority clients
+    public void DrawInitialHand()
+    {
+        if (HasStateAuthority)
+        {
+            _hand.Clear();
+            
+            // Draw starting hand
+            for (int i = 0; i < HAND_SIZE; i++)
+            {
+                DrawCard();
+            }
+            
+            // Update networked hand directly
+            UpdateNetworkedHand();
+            
+            // Log for debugging
+            GameManager.Instance.LogManager.LogMessage($"Initial hand drawn for {PlayerName} with {_hand.Count} cards");
+            
+            // Call RPC to ensure all clients update their local hands from networked data
+            RPC_NotifyHandChanged();
+        }
+    }
+    
+    // NEW METHOD: Force draw hand without authority check (for RPC calls)
+    public void ForceDrawInitialHand()
+    {
+        _hand.Clear();
+        
+        // Draw starting hand
+        for (int i = 0; i < HAND_SIZE; i++)
+        {
+            DrawCard();
+        }
+        
+        // Update networked hand only if we have authority
+        if (HasStateAuthority)
+        {
+            UpdateNetworkedHand();
+        }
+        
+        GameManager.Instance.LogManager.LogMessage($"Force drew initial hand for {PlayerName} with {_hand.Count} cards");
+    }
+    
+    // NEW RPC: Notify all clients that the hand has changed
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyHandChanged()
+    {
+        // Force a local update of the hand from networked data
+        UpdateLocalHandFromNetworked();
+    }
+
     // Create local monster from networked data
     private void RecreateMonsterFromNetworkedData()
     {
@@ -370,25 +422,6 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-    public void DrawInitialHand()
-    {
-        if (HasStateAuthority)
-        {
-            _hand.Clear();
-            
-            // Draw starting hand
-            for (int i = 0; i < HAND_SIZE; i++)
-            {
-                DrawCard();
-            }
-            
-            // Update networked hand directly
-            UpdateNetworkedHand();
-            
-            GameManager.Instance.LogManager.LogMessage($"Initial hand drawn for {PlayerName} with {_hand.Count} cards");
-        }
-    }
-
     // Update networked hand from local hand
     private void UpdateNetworkedHand()
     {
@@ -523,6 +556,9 @@ public class PlayerState : NetworkBehaviour
             
             // Update networked hand
             UpdateNetworkedHand();
+            
+            // Notify all clients
+            RPC_NotifyHandChanged();
             
             GameManager.Instance.LogManager.LogMessage($"{PlayerName} played {card.Name}");
         }

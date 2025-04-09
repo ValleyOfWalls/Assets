@@ -163,8 +163,8 @@ public class GameState : NetworkBehaviour
         // Assign initial monster matchups
         AssignMonsterMatchups();
         
-        // Deal initial cards to all players
-        DealInitialCards();
+        // Use RPC to ensure all players draw cards
+        RPC_DrawInitialCardsForAllPlayers();
         
         // Start first turn
         CurrentTurnPlayerIndex = 0;
@@ -172,6 +172,40 @@ public class GameState : NetworkBehaviour
         
         // Notify about game active state change
         OnGameActiveChanged?.Invoke(true);
+    }
+    
+    // NEW RPC: Ensure all players draw cards
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_DrawInitialCardsForAllPlayers()
+    {
+        if (GameManager.Instance != null)
+            GameManager.Instance.LogManager.LogMessage("Drawing initial cards for all players");
+        
+        // First try the normal draw method for authority players
+        foreach (var playerEntry in _playerStates)
+        {
+            playerEntry.Value.DrawInitialHand();
+        }
+        
+        // Use this delayed call to ensure cards are drawn even for non-authority players
+        StartCoroutine(DelayedForceCardDraw());
+    }
+    
+    // NEW METHOD: Delayed force card draw to ensure all players get cards
+    private IEnumerator DelayedForceCardDraw()
+    {
+        // Wait a short time to allow normal draws to complete
+        yield return new WaitForSeconds(0.2f);
+        
+        // Force draw for all players to ensure everyone has cards
+        foreach (var playerEntry in _playerStates)
+        {
+            // Call the force draw method that bypasses authority check
+            playerEntry.Value.ForceDrawInitialHand();
+        }
+        
+        if (GameManager.Instance != null)
+            GameManager.Instance.LogManager.LogMessage("Forced initial card draw for all players");
     }
 
     private void AssignMonsterMatchups()
