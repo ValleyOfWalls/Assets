@@ -1,4 +1,5 @@
 using UnityEngine;
+using Fusion;
 
 public class GameManager : MonoBehaviour
 {
@@ -13,6 +14,9 @@ public class GameManager : MonoBehaviour
     [HideInInspector] public CameraManager CameraManager { get; private set; }
     [HideInInspector] public LobbyManager LobbyManager { get; private set; }
     [HideInInspector] public GameInitializer GameInitializer { get; private set; }
+
+    // Reference to GameState prefab and instance
+    private GameObject _gameStateObj;
 
     // Game state
     private bool _gameStarted = false;
@@ -48,8 +52,8 @@ public class GameManager : MonoBehaviour
         // Initialize all managers in the correct order
         LogManager.LogMessage("Starting manager initialization...");
         
-        // Create GameState early during initialization
-        CreateGameState();
+        // Early create GameState prefab during initialization
+        CreateGameStatePrefab();
         
         // First initialize network and player managers
         NetworkManager.Initialize();
@@ -69,16 +73,30 @@ public class GameManager : MonoBehaviour
         LogManager.LogMessage("All managers initialized successfully");
     }
     
-    private void CreateGameState()
+    private void CreateGameStatePrefab()
     {
-        // Create GameState object
-        GameObject gameStateObj = new GameObject("GameState");
-        DontDestroyOnLoad(gameStateObj);
+        // Load the GameState prefab from Resources
+        GameObject gameStatePrefab = Resources.Load<GameObject>("GameStatePrefab");
         
-        // Add required components
-        GameState gameState = gameStateObj.AddComponent<GameState>();
+        if (gameStatePrefab == null)
+        {
+            LogManager.LogError("GameStatePrefab not found in Resources folder! Creating a temporary one...");
+            
+            // Create a temporary GameState object since prefab wasn't found
+            _gameStateObj = new GameObject("GameState");
+            _gameStateObj.AddComponent<NetworkObject>();
+            _gameStateObj.AddComponent<GameState>();
+            DontDestroyOnLoad(_gameStateObj);
+            
+            LogManager.LogMessage("Temporary GameState created during initialization");
+            return;
+        }
         
-        LogManager.LogMessage("GameState created during initialization");
+        // Instantiate the prefab (not networked yet)
+        _gameStateObj = Instantiate(gameStatePrefab);
+        DontDestroyOnLoad(_gameStateObj);
+        
+        LogManager.LogMessage("GameState prefab instantiated during initialization");
     }
     
     // Handle game state transitions
@@ -93,7 +111,14 @@ public class GameManager : MonoBehaviour
         _gameStarted = true;
         
         // Network the GameState that was created during initialization
-        GameState.Instance.NetworkGameState();
+        if (GameState.Instance != null)
+        {
+            GameState.Instance.NetworkGameState();
+        }
+        else
+        {
+            LogManager.LogError("GameState.Instance is null! Cannot network GameState.");
+        }
         
         // Initialize game systems through the GameInitializer
         GameInitializer.InitializeGame();

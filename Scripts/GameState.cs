@@ -65,9 +65,16 @@ public class GameState : NetworkBehaviour
         }
         else if (_instance != this)
         {
+            // Instead of creating multiple instances, just log a warning and destroy this one
             if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
             {
-                GameManager.Instance.LogManager.LogMessage("Multiple GameState instances detected!");
+                GameManager.Instance.LogManager.LogMessage("Duplicate GameState detected - destroying duplicate");
+            }
+            
+            // Destroy this instance since we already have a singleton
+            if (Application.isPlaying)
+            {
+                Destroy(gameObject);
             }
         }
     }
@@ -79,21 +86,37 @@ public class GameState : NetworkBehaviour
         
         // Get network runner
         var runner = GameManager.Instance.NetworkManager.GetRunner();
-        if (runner == null) return;
+        if (runner == null)
+        {
+            GameManager.Instance.LogManager.LogError("Cannot network GameState: NetworkRunner is null");
+            return;
+        }
         
-        // Add a NetworkObject component if it doesn't exist
+        // Check if we already have a NetworkObject component
         NetworkObject networkObject = GetComponent<NetworkObject>();
         if (networkObject == null)
         {
-            networkObject = gameObject.AddComponent<NetworkObject>();
+            GameManager.Instance.LogManager.LogError("GameState is missing NetworkObject component!");
+            return;
         }
         
         // Network this object
         if (runner.IsRunning)
         {
-            runner.Spawn(networkObject);
-            _isNetworked = true;
-            GameManager.Instance.LogManager.LogMessage("GameState networked successfully");
+            try
+            {
+                runner.Spawn(networkObject);
+                _isNetworked = true;
+                GameManager.Instance.LogManager.LogMessage("GameState networked successfully");
+            }
+            catch (Exception ex)
+            {
+                GameManager.Instance.LogManager.LogError($"Failed to network GameState: {ex.Message}");
+            }
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogError("Cannot network GameState: NetworkRunner is not running");
         }
     }
 
@@ -102,6 +125,8 @@ public class GameState : NetworkBehaviour
         base.Spawned();
         
         // Ensure instance is set when spawned on the network
+        // This is important because Spawned() might be called on a different instance
+        // than the one we created in Awake() if we're using a prefab
         SetupSingleton();
         
         if (HasStateAuthority)
@@ -183,10 +208,6 @@ public class GameState : NetworkBehaviour
         {
             // Each player fights the next player's monster (circular)
             PlayerRef opponent = players[(i + 1) % players.Count];
-            
-            // Set the matchup
-            PlayerState playerState = _playerStates[players[i]];
-            PlayerState opponentState = _playerStates[opponent];
             
             // Use RPCs to inform clients of their matchups
             RPC_SetMonsterMatchup(players[i], opponent);

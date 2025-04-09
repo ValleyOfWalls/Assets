@@ -373,18 +373,18 @@ public class PlayerState : NetworkBehaviour
     }
 
     public void ModifyHealth(int amount)
-{
-    if (!HasStateAuthority) return;
-    
-    Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
-    OnStatsChanged?.Invoke(this);
-    
-    if (Health <= 0)
     {
-        GameManager.Instance.LogManager.LogMessage($"{PlayerName} has been defeated!");
-        // Handle player defeat
+        if (!HasStateAuthority) return;
+        
+        Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
+        OnStatsChanged?.Invoke(this);
+        
+        if (Health <= 0)
+        {
+            GameManager.Instance.LogManager.LogMessage($"{PlayerName} has been defeated!");
+            // Handle player defeat
+        }
     }
-}
 
     public void ModifyEnergy(int amount)
     {

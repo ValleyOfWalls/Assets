@@ -5,14 +5,9 @@ using System.Collections;
 public class GameInitializer : MonoBehaviour
 {
     // Game object references
-    private GameObject _gameStateObject;
     private GameObject _gameUIObject;
     
-    // Network objects
-    private NetworkObject _gameStateNetworkObject;
-    
     // Component references
-    private GameState _gameState;
     private GameUI _gameUI;
     
     // Game state
@@ -42,9 +37,6 @@ public class GameInitializer : MonoBehaviour
             yield break;
         }
         
-        // Create game state - this needs to be networked
-        CreateGameState(runner);
-        
         // Wait a frame to ensure GameState is spawned and registered
         yield return null;
         
@@ -64,16 +56,10 @@ public class GameInitializer : MonoBehaviour
             yield return new WaitForSeconds(0.1f);
         }
 
-        // Store the reference to GameState
-        _gameState = GameState.Instance;
-        
-        // Start the game to initialize player objects
-        _gameState.StartGame();
-        
         // Wait for the local player to be registered with GameState
         timeoutSeconds = 10.0f;
         startTime = Time.time;
-        while (_gameState.GetLocalPlayerState() == null)
+        while (GameState.Instance.GetLocalPlayerState() == null)
         {
             if (Time.time - startTime > timeoutSeconds)
             {
@@ -83,7 +69,7 @@ public class GameInitializer : MonoBehaviour
                 CreateTemporaryPlayerState(runner);
                 
                 yield return new WaitForSeconds(0.5f);
-                if (_gameState.GetLocalPlayerState() == null)
+                if (GameState.Instance.GetLocalPlayerState() == null)
                 {
                     GameManager.Instance.LogManager.LogError("Failed to create local player state");
                     _initializationInProgress = false;
@@ -107,49 +93,6 @@ public class GameInitializer : MonoBehaviour
         
         // Start gameplay immediately once initialization is complete
         StartGameplay();
-    }
-
-    private void CreateGameState(NetworkRunner runner)
-    {
-        // Load the GameState prefab from Resources
-        NetworkObject gameStatePrefab = Resources.Load<NetworkObject>("GameState");
-        
-        if (gameStatePrefab == null)
-        {
-            GameManager.Instance.LogManager.LogError("Failed to load GameState prefab from Resources folder!");
-            return;
-        }
-        
-        GameManager.Instance.LogManager.LogMessage("GameState prefab loaded successfully from Resources");
-        
-        // Spawn the prefab on the network
-        try
-        {
-            _gameStateNetworkObject = runner.Spawn(gameStatePrefab);
-            
-            if (_gameStateNetworkObject != null)
-            {
-                _gameStateObject = _gameStateNetworkObject.gameObject;
-                _gameState = _gameStateObject.GetComponent<GameState>();
-                
-                GameManager.Instance.LogManager.LogMessage($"GameState spawned with ID: {_gameStateNetworkObject.Id}");
-                
-                if (_gameState == null)
-                {
-                    // Add GameState component if it doesn't exist
-                    _gameState = _gameStateObject.AddComponent<GameState>();
-                    GameManager.Instance.LogManager.LogMessage("Added GameState component to spawned object");
-                }
-            }
-            else
-            {
-                GameManager.Instance.LogManager.LogError("Failed to spawn GameState prefab!");
-            }
-        }
-        catch (System.Exception ex)
-        {
-            GameManager.Instance.LogManager.LogError($"Error spawning GameState: {ex.Message}");
-        }
     }
 
     // Helper class to track temporary player states
@@ -246,7 +189,7 @@ public class GameInitializer : MonoBehaviour
             return;
         }
         
-        if (_gameState == null)
+        if (GameState.Instance == null)
         {
             GameManager.Instance.LogManager.LogError("Cannot start gameplay: GameState is null!");
             return;
@@ -254,8 +197,8 @@ public class GameInitializer : MonoBehaviour
         
         _gameplayStarted = true;
         
-        // Note: We don't call StartGame again since we already called it in InitializeGameSequence
-        // _gameState.StartGame();
+        // Start the game with the GameState that was networked by GameManager
+        GameState.Instance.StartGame();
         
         GameManager.Instance.LogManager.LogMessage("Gameplay started!");
     }
@@ -276,26 +219,6 @@ public class GameInitializer : MonoBehaviour
             _gameUIObject = null;
             _gameUI = null;
         }
-        
-        // Despawn game state from network if we have authority
-        NetworkRunner runner = GameManager.Instance.NetworkManager.GetRunner();
-        if (runner != null && _gameStateNetworkObject != null)
-        {
-            if (_gameStateNetworkObject.HasStateAuthority)
-            {
-                runner.Despawn(_gameStateNetworkObject);
-                GameManager.Instance.LogManager.LogMessage("GameState despawned from network");
-            }
-            _gameStateNetworkObject = null;
-        }
-        else if (_gameStateObject != null)
-        {
-            // Destroy locally if we can't despawn
-            Destroy(_gameStateObject);
-            GameManager.Instance.LogManager.LogMessage("GameState destroyed locally");
-        }
-        _gameStateObject = null;
-        _gameState = null;
         
         // Reset flags
         _gameInitialized = false;
