@@ -37,12 +37,10 @@ public class GameInitializer : MonoBehaviour
             yield break;
         }
         
-        // Wait a frame to ensure GameState is spawned and registered
-        yield return null;
-        
-        // Wait for GameState.Instance to be available 
-        float timeoutSeconds = 5.0f;
+        // Wait for GameState.Instance to be available
+        float timeoutSeconds = 10.0f;
         float startTime = Time.time;
+        
         while (GameState.Instance == null)
         {
             if (Time.time - startTime > timeoutSeconds)
@@ -53,12 +51,30 @@ public class GameInitializer : MonoBehaviour
             }
             
             GameManager.Instance.LogManager.LogMessage("Waiting for GameState.Instance to be available...");
-            yield return new WaitForSeconds(0.1f);
+            yield return new WaitForSeconds(0.2f);
         }
-
-        // Wait for the local player to be registered with GameState
+        
+        // Make sure the GameState is spawned on the network
+        timeoutSeconds = 5.0f;
+        startTime = Time.time;
+        
+        while (!GameState.Instance.IsSpawned())
+        {
+            if (Time.time - startTime > timeoutSeconds)
+            {
+                GameManager.Instance.LogManager.LogError("GameState.Instance exists but is not spawned properly");
+                _initializationInProgress = false;
+                yield break;
+            }
+            
+            GameManager.Instance.LogManager.LogMessage("Waiting for GameState to be fully spawned...");
+            yield return new WaitForSeconds(0.2f);
+        }
+        
+        // Wait for local player to be registered with GameState
         timeoutSeconds = 10.0f;
         startTime = Time.time;
+        
         while (GameState.Instance.GetLocalPlayerState() == null)
         {
             if (Time.time - startTime > timeoutSeconds)
@@ -66,9 +82,8 @@ public class GameInitializer : MonoBehaviour
                 GameManager.Instance.LogManager.LogMessage("Local player not registered after timeout, creating a temporary player state");
                 
                 // Force player registration by creating a temporary PlayerState
-                CreateTemporaryPlayerState(runner);
+                yield return StartCoroutine(CreateTemporaryPlayerState(runner));
                 
-                yield return new WaitForSeconds(0.5f);
                 if (GameState.Instance.GetLocalPlayerState() == null)
                 {
                     GameManager.Instance.LogManager.LogError("Failed to create local player state");
@@ -98,30 +113,32 @@ public class GameInitializer : MonoBehaviour
     // Helper class to track temporary player states
     private class TemporaryPlayerStateMarker : MonoBehaviour { }
 
-    private void CreateTemporaryPlayerState(NetworkRunner runner)
+    private IEnumerator CreateTemporaryPlayerState(NetworkRunner runner)
     {
-        // Create a GameObject for player state
+        // Try to create a temporary player state
         GameObject playerStateObj = new GameObject("TemporaryPlayerState");
         DontDestroyOnLoad(playerStateObj);
         
         // Add network object component
         NetworkObject networkObject = playerStateObj.AddComponent<NetworkObject>();
         
-        // Add player state component and initialize it with non-networked properties
+        // Add player state component
         PlayerState playerState = playerStateObj.AddComponent<PlayerState>();
         
-        // We need to add this component to help track it later
+        // Add marker component for tracking
         playerStateObj.AddComponent<TemporaryPlayerStateMarker>();
         
         // Initialize temporary monster
-        InitializeTempPlayerMonster(playerState);
+        yield return StartCoroutine(InitializeTempPlayerMonster(playerState));
         
-        // Manually register with GameState
+        // Register with GameState
         if (GameState.Instance != null)
         {
-            // Pass local player ref and the new state object
             GameState.Instance.RegisterPlayer(runner.LocalPlayer, playerState);
             GameManager.Instance.LogManager.LogMessage("Manually registered temporary player state");
+            
+            // Wait a frame for registration to complete
+            yield return null;
         }
         else
         {
@@ -130,7 +147,7 @@ public class GameInitializer : MonoBehaviour
     }
 
     // Initialize a default monster for the temporary player
-    private void InitializeTempPlayerMonster(PlayerState playerState)
+    private IEnumerator InitializeTempPlayerMonster(PlayerState playerState)
     {
         try
         {
@@ -163,6 +180,8 @@ public class GameInitializer : MonoBehaviour
         {
             GameManager.Instance.LogManager.LogMessage($"Failed to initialize monster: {ex.Message}");
         }
+        
+        yield return null;
     }
 
     private void CreateGameUI()
@@ -195,9 +214,15 @@ public class GameInitializer : MonoBehaviour
             return;
         }
         
+        if (!GameState.Instance.IsSpawned())
+        {
+            GameManager.Instance.LogManager.LogError("Cannot start gameplay: GameState is not spawned!");
+            return;
+        }
+        
         _gameplayStarted = true;
         
-        // Start the game with the GameState that was networked by GameManager
+        // Start the game with the GameState that was spawned on the network
         GameState.Instance.StartGame();
         
         GameManager.Instance.LogManager.LogMessage("Gameplay started!");

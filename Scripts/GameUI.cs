@@ -10,21 +10,22 @@ public class GameUI : MonoBehaviour
 {
     // UI References
     private Canvas _gameCanvas;
-    private GameObject _handContainer;
+    
+    // Main container panels
+    private GameObject _mainLayout;
+    private GameObject _handPanel;
     private GameObject _statsPanel;
     private GameObject _opponentsPanel;
-    private GameObject _monsterDisplay;
-    private GameObject _roundInfoPanel;
-    private Button _endTurnButton;
+    private GameObject _monsterPanel;
+    private GameObject _turnInfoPanel;
     
-    // UI Prefabs
+    // Card references
     private GameObject _cardPrefab;
-    private GameObject _opponentStatsPrefab;
-    
-    // References
-    private PlayerState _localPlayerState;
     private List<CardDisplay> _cardDisplays = new List<CardDisplay>();
-    private Dictionary<PlayerRef, OpponentStatsDisplay> _opponentDisplays = new Dictionary<PlayerRef, OpponentStatsDisplay>();
+    
+    // Monster displays
+    private MonsterDisplay _playerMonsterDisplay;
+    private MonsterDisplay _opponentMonsterDisplay;
     
     // Stats Text Elements
     private TMP_Text _healthText;
@@ -33,13 +34,21 @@ public class GameUI : MonoBehaviour
     private TMP_Text _roundText;
     private TMP_Text _turnInfoText;
     
-    private MonsterDisplay _playerMonsterDisplay;
-    private MonsterDisplay _opponentMonsterDisplay;
+    // Opponent references
+    private GameObject _opponentStatsPrefab;
+    private Dictionary<PlayerRef, OpponentStatsDisplay> _opponentDisplays = new Dictionary<PlayerRef, OpponentStatsDisplay>();
     
+    // Button references
+    private Button _endTurnButton;
+    
+    // References
+    private PlayerState _localPlayerState;
+    
+    // Initialization state
     private bool _initialized = false;
     private bool _initializationInProgress = false;
-    private float _initRetryInterval = 0.5f; // Retry every half second
-    private int _maxInitRetries = 10; // Maximum number of retries
+    private float _initRetryInterval = 0.5f;
+    private int _maxInitRetries = 20;
 
     public void Initialize()
     {
@@ -58,10 +67,10 @@ public class GameUI : MonoBehaviour
         
         while (retryCount < _maxInitRetries)
         {
-            // Wait for GameState to be available
-            if (GameState.Instance == null)
+            // Wait for GameState to be available and spawned
+            if (GameState.Instance == null || !GameState.Instance.IsSpawned())
             {
-                GameManager.Instance.LogManager.LogMessage($"GameState not available, retrying ({retryCount+1}/{_maxInitRetries})");
+                GameManager.Instance.LogManager.LogMessage($"GameState not available or not spawned, retrying ({retryCount+1}/{_maxInitRetries})");
                 retryCount++;
                 yield return new WaitForSeconds(_initRetryInterval);
                 continue;
@@ -82,12 +91,13 @@ public class GameUI : MonoBehaviour
             
             // Create UI
             CreateMainCanvas();
-            CreateHandArea();
-            CreatePlayerStatsPanel();
-            CreateOpponentsPanel();
-            CreateMonsterDisplays();
-            CreateRoundInfoPanel();
-            CreateEndTurnButton();
+            CreateMainLayout();
+            CreateCardPrefab();
+            CreatePlayerUI();
+            CreateOpponentsUI();
+            CreateMonsterUI();
+            CreateTurnInfoUI();
+            CreateHandUI();
             
             // Subscribe to events
             PlayerState.OnStatsChanged += UpdatePlayerStats;
@@ -99,7 +109,7 @@ public class GameUI : MonoBehaviour
             _initializationInProgress = false;
             GameManager.Instance.LogManager.LogMessage("GameUI fully initialized");
             
-            // Hide lobby UI - IMPORTANT: This needs to happen before updating UI
+            // Hide lobby UI
             HideLobbyUI();
             
             // Initial UI update
@@ -124,6 +134,7 @@ public class GameUI : MonoBehaviour
         CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920, 1080);
+        scaler.matchWidthOrHeight = 0.5f; // Balance width and height
         
         canvasObj.AddComponent<GraphicRaycaster>();
         DontDestroyOnLoad(canvasObj);
@@ -131,39 +142,48 @@ public class GameUI : MonoBehaviour
         GameManager.Instance.LogManager.LogMessage("Game canvas created");
     }
 
-    private void CreateHandArea()
+    private void CreateMainLayout()
     {
-        // Create the container for the player's hand
-        _handContainer = CreateUIPanel("HandContainer", new Vector2(0.5f, 0), new Vector2(0.5f, 0), 
-                                       new Vector2(0.1f, 0.01f), new Vector2(0.9f, 0.25f));
+        // Create a main layout container that will hold all UI elements
+        _mainLayout = new GameObject("MainLayout");
+        _mainLayout.transform.SetParent(_gameCanvas.transform, false);
         
-        // Create card prefab
-        _cardPrefab = CreateCardPrefab();
+        // Add a background image
+        Image background = _mainLayout.AddComponent<Image>();
+        background.color = new Color(0.05f, 0.05f, 0.1f, 0.8f); // Dark blue semi-transparent background
         
-        GameManager.Instance.LogManager.LogMessage("Hand area created");
+        // Set to full screen
+        RectTransform mainRect = _mainLayout.GetComponent<RectTransform>();
+        mainRect.anchorMin = Vector2.zero;
+        mainRect.anchorMax = Vector2.one;
+        mainRect.offsetMin = Vector2.zero;
+        mainRect.offsetMax = Vector2.zero;
+        
+        GameManager.Instance.LogManager.LogMessage("Main layout created");
     }
-
-    private GameObject CreateCardPrefab()
+    
+    private void CreateCardPrefab()
     {
-        GameObject cardObj = new GameObject("CardPrefab");
-        cardObj.SetActive(false);
+        // Create card prefab for hand display
+        _cardPrefab = new GameObject("CardPrefab");
+        _cardPrefab.SetActive(false);
         
         // Card background
-        Image cardBg = cardObj.AddComponent<Image>();
+        Image cardBg = _cardPrefab.AddComponent<Image>();
         cardBg.color = new Color(0.2f, 0.2f, 0.2f);
         
         // Card layout
-        RectTransform cardRect = cardObj.GetComponent<RectTransform>();
-        cardRect.sizeDelta = new Vector2(150, 200);
+        RectTransform cardRect = _cardPrefab.GetComponent<RectTransform>();
+        cardRect.sizeDelta = new Vector2(180, 250);
         
         // Add CardDisplay component
-        CardDisplay display = cardObj.AddComponent<CardDisplay>();
+        CardDisplay display = _cardPrefab.AddComponent<CardDisplay>();
         
         // Create title text
         GameObject titleObj = new GameObject("TitleText");
-        titleObj.transform.SetParent(cardObj.transform, false);
+        titleObj.transform.SetParent(_cardPrefab.transform, false);
         TMP_Text titleText = titleObj.AddComponent<TextMeshProUGUI>();
-        titleText.fontSize = 14;
+        titleText.fontSize = 16;
         titleText.alignment = TextAlignmentOptions.Center;
         titleText.color = Color.white;
         
@@ -175,9 +195,9 @@ public class GameUI : MonoBehaviour
         
         // Create cost text
         GameObject costObj = new GameObject("CostText");
-        costObj.transform.SetParent(cardObj.transform, false);
+        costObj.transform.SetParent(_cardPrefab.transform, false);
         TMP_Text costText = costObj.AddComponent<TextMeshProUGUI>();
-        costText.fontSize = 18;
+        costText.fontSize = 20;
         costText.alignment = TextAlignmentOptions.Center;
         costText.color = Color.yellow;
         
@@ -202,9 +222,9 @@ public class GameUI : MonoBehaviour
         
         // Create description text
         GameObject descObj = new GameObject("DescriptionText");
-        descObj.transform.SetParent(cardObj.transform, false);
+        descObj.transform.SetParent(_cardPrefab.transform, false);
         TMP_Text descText = descObj.AddComponent<TextMeshProUGUI>();
-        descText.fontSize = 12;
+        descText.fontSize = 14;
         descText.alignment = TextAlignmentOptions.Center;
         descText.color = Color.white;
         
@@ -218,7 +238,7 @@ public class GameUI : MonoBehaviour
         display.SetTextElements(titleText, costText, descText);
         
         // Add button for interactivity
-        Button cardButton = cardObj.AddComponent<Button>();
+        Button cardButton = _cardPrefab.AddComponent<Button>();
         ColorBlock colors = cardButton.colors;
         colors.highlightedColor = new Color(0.8f, 0.8f, 1f);
         colors.pressedColor = new Color(0.7f, 0.7f, 0.9f);
@@ -227,20 +247,28 @@ public class GameUI : MonoBehaviour
         // Set up the button click handler
         display.SetButton(cardButton);
         
-        return cardObj;
+        GameManager.Instance.LogManager.LogMessage("Card prefab created");
     }
 
-    private void CreatePlayerStatsPanel()
+    private void CreatePlayerUI()
     {
-        // Create stats panel in the top left
-        _statsPanel = CreateUIPanel("PlayerStatsPanel", new Vector2(0, 1), new Vector2(0, 1), 
-                                   new Vector2(0.01f, 0.8f), new Vector2(0.25f, 0.99f));
+        // Create player stats panel
+        _statsPanel = new GameObject("PlayerStats");
+        _statsPanel.transform.SetParent(_mainLayout.transform, false);
         
         // Background
-        Image bg = _statsPanel.AddComponent<Image>();
-        bg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
+        Image statsBg = _statsPanel.AddComponent<Image>();
+        statsBg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
         
-        // Player name - safely get name to avoid errors with networked properties
+        // Position in top left
+        RectTransform statsRect = _statsPanel.GetComponent<RectTransform>();
+        statsRect.anchorMin = new Vector2(0, 1);
+        statsRect.anchorMax = new Vector2(0.2f, 1);
+        statsRect.pivot = new Vector2(0, 1);
+        statsRect.offsetMin = new Vector2(20, -200);
+        statsRect.offsetMax = new Vector2(-20, -20);
+        
+        // Add player name
         GameObject nameObj = new GameObject("PlayerName");
         nameObj.transform.SetParent(_statsPanel.transform, false);
         TMP_Text nameText = nameObj.AddComponent<TextMeshProUGUI>();
@@ -252,43 +280,41 @@ public class GameUI : MonoBehaviour
                 playerName = _localPlayerState.PlayerName.ToString();
             }
         }
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Could not access PlayerName: {ex.Message}. Using default name.");
         }
         
         nameText.text = playerName;
-        nameText.fontSize = 18;
+        nameText.fontSize = 20;
         nameText.color = Color.white;
         nameText.alignment = TextAlignmentOptions.Center;
+        nameText.fontStyle = FontStyles.Bold;
         
         RectTransform nameRect = nameObj.GetComponent<RectTransform>();
         nameRect.anchorMin = new Vector2(0, 0.85f);
         nameRect.anchorMax = new Vector2(1, 1);
-        nameRect.offsetMin = Vector2.zero;
-        nameRect.offsetMax = Vector2.zero;
+        nameRect.offsetMin = new Vector2(10, 0);
+        nameRect.offsetMax = new Vector2(-10, -5);
         
-        // Health
-        GameObject healthObj = CreateStatDisplay(_statsPanel, "Health", "Health: 50/50", 0.7f, 0.85f);
-        _healthText = healthObj.GetComponent<TMP_Text>();
+        // Add health
+        _healthText = CreateStatText(_statsPanel, "Health", "Health: 50/50", 0.7f, 0.85f);
         
-        // Energy
-        GameObject energyObj = CreateStatDisplay(_statsPanel, "Energy", "Energy: 3/3", 0.55f, 0.7f);
-        _energyText = energyObj.GetComponent<TMP_Text>();
+        // Add energy
+        _energyText = CreateStatText(_statsPanel, "Energy", "Energy: 3/3", 0.55f, 0.7f);
         
-        // Score
-        GameObject scoreObj = CreateStatDisplay(_statsPanel, "Score", "Score: 0", 0.4f, 0.55f);
-        _scoreText = scoreObj.GetComponent<TMP_Text>();
+        // Add score
+        _scoreText = CreateStatText(_statsPanel, "Score", "Score: 0", 0.4f, 0.55f);
         
         GameManager.Instance.LogManager.LogMessage("Player stats panel created");
     }
 
-    private GameObject CreateStatDisplay(GameObject parent, string name, string defaultText, float minY, float maxY)
+    private TMP_Text CreateStatText(GameObject parent, string name, string defaultText, float minY, float maxY)
     {
         GameObject statObj = new GameObject(name);
         statObj.transform.SetParent(parent.transform, false);
         TMP_Text statText = statObj.AddComponent<TextMeshProUGUI>();
         statText.text = defaultText;
-        statText.fontSize = 16;
+        statText.fontSize = 18;
         statText.color = Color.white;
         statText.alignment = TextAlignmentOptions.Left;
         
@@ -298,23 +324,31 @@ public class GameUI : MonoBehaviour
         statRect.offsetMin = Vector2.zero;
         statRect.offsetMax = Vector2.zero;
         
-        return statObj;
+        return statText;
     }
 
-    private void CreateOpponentsPanel()
+    private void CreateOpponentsUI()
     {
-        // Create panel on the right for opponents
-        _opponentsPanel = CreateUIPanel("OpponentsPanel", new Vector2(1, 0.5f), new Vector2(1, 0.5f), 
-                                       new Vector2(0.85f, 0.2f), new Vector2(0.99f, 0.8f));
+        // Create opponents panel on the right
+        _opponentsPanel = new GameObject("OpponentsPanel");
+        _opponentsPanel.transform.SetParent(_mainLayout.transform, false);
         
         // Background
-        Image bg = _opponentsPanel.AddComponent<Image>();
-        bg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
+        Image opponentsBg = _opponentsPanel.AddComponent<Image>();
+        opponentsBg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
+        
+        // Position on the right
+        RectTransform opponentsRect = _opponentsPanel.GetComponent<RectTransform>();
+        opponentsRect.anchorMin = new Vector2(0.8f, 0.3f);
+        opponentsRect.anchorMax = new Vector2(1, 0.9f);
+        opponentsRect.pivot = new Vector2(1, 0.5f);
+        opponentsRect.offsetMin = new Vector2(20, 0);
+        opponentsRect.offsetMax = new Vector2(-20, 0);
         
         // Add vertical layout
         VerticalLayoutGroup layout = _opponentsPanel.AddComponent<VerticalLayoutGroup>();
         layout.spacing = 10;
-        layout.padding = new RectOffset(5, 5, 5, 5);
+        layout.padding = new RectOffset(10, 10, 10, 10);
         
         // Create opponent stats prefab
         _opponentStatsPrefab = CreateOpponentStatsPrefab();
@@ -336,11 +370,11 @@ public class GameUI : MonoBehaviour
         
         // Layout
         RectTransform rect = opponentObj.GetComponent<RectTransform>();
-        rect.sizeDelta = new Vector2(0, 80);
+        rect.sizeDelta = new Vector2(0, 100);
         
         // Add layout element for sizing
         LayoutElement layoutElement = opponentObj.AddComponent<LayoutElement>();
-        layoutElement.preferredHeight = 80;
+        layoutElement.preferredHeight = 100;
         layoutElement.flexibleWidth = 1;
         
         // Add stats display component
@@ -350,21 +384,22 @@ public class GameUI : MonoBehaviour
         GameObject nameObj = new GameObject("Name");
         nameObj.transform.SetParent(opponentObj.transform, false);
         TMP_Text nameText = nameObj.AddComponent<TextMeshProUGUI>();
-        nameText.fontSize = 16;
+        nameText.fontSize = 18;
         nameText.alignment = TextAlignmentOptions.Center;
         nameText.color = Color.white;
+        nameText.fontStyle = FontStyles.Bold;
         
         RectTransform nameRect = nameObj.GetComponent<RectTransform>();
         nameRect.anchorMin = new Vector2(0, 0.7f);
         nameRect.anchorMax = new Vector2(1, 1);
-        nameRect.offsetMin = Vector2.zero;
-        nameRect.offsetMax = Vector2.zero;
+        nameRect.offsetMin = new Vector2(5, 0);
+        nameRect.offsetMax = new Vector2(-5, -5);
         
         // Health
         GameObject healthObj = new GameObject("Health");
         healthObj.transform.SetParent(opponentObj.transform, false);
         TMP_Text healthText = healthObj.AddComponent<TextMeshProUGUI>();
-        healthText.fontSize = 14;
+        healthText.fontSize = 16;
         healthText.alignment = TextAlignmentOptions.Left;
         healthText.color = Color.red;
         
@@ -378,7 +413,7 @@ public class GameUI : MonoBehaviour
         GameObject scoreObj = new GameObject("Score");
         scoreObj.transform.SetParent(opponentObj.transform, false);
         TMP_Text scoreText = scoreObj.AddComponent<TextMeshProUGUI>();
-        scoreText.fontSize = 14;
+        scoreText.fontSize = 16;
         scoreText.alignment = TextAlignmentOptions.Left;
         scoreText.color = Color.yellow;
         
@@ -394,40 +429,52 @@ public class GameUI : MonoBehaviour
         return opponentObj;
     }
 
-    private void CreateMonsterDisplays()
+    private void CreateMonsterUI()
     {
-        // Create area for monster display in center
-        _monsterDisplay = CreateUIPanel("MonsterDisplay", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), 
-                                       new Vector2(0.3f, 0.35f), new Vector2(0.7f, 0.7f));
+        // Create monster area in the center
+        _monsterPanel = new GameObject("MonsterPanel");
+        _monsterPanel.transform.SetParent(_mainLayout.transform, false);
         
-        // Create player's monster
+        // Background
+        Image monsterBg = _monsterPanel.AddComponent<Image>();
+        monsterBg.color = new Color(0.1f, 0.1f, 0.2f, 0.4f); // More transparent
+        
+        // Position in center
+        RectTransform monsterRect = _monsterPanel.GetComponent<RectTransform>();
+        monsterRect.anchorMin = new Vector2(0.2f, 0.3f);
+        monsterRect.anchorMax = new Vector2(0.8f, 0.8f);
+        monsterRect.offsetMin = Vector2.zero;
+        monsterRect.offsetMax = Vector2.zero;
+        
+        // Create player's monster on left
         GameObject playerMonsterObj = new GameObject("PlayerMonster");
-        playerMonsterObj.transform.SetParent(_monsterDisplay.transform, false);
+        playerMonsterObj.transform.SetParent(_monsterPanel.transform, false);
         _playerMonsterDisplay = playerMonsterObj.AddComponent<MonsterDisplay>();
         
         RectTransform playerMonsterRect = playerMonsterObj.GetComponent<RectTransform>();
         playerMonsterRect.anchorMin = new Vector2(0, 0);
         playerMonsterRect.anchorMax = new Vector2(0.45f, 1);
-        playerMonsterRect.offsetMin = Vector2.zero;
-        playerMonsterRect.offsetMax = Vector2.zero;
+        playerMonsterRect.offsetMin = new Vector2(20, 20);
+        playerMonsterRect.offsetMax = new Vector2(-10, -20);
         
-        // Create opponent's monster
+        // Create opponent's monster on right
         GameObject opponentMonsterObj = new GameObject("OpponentMonster");
-        opponentMonsterObj.transform.SetParent(_monsterDisplay.transform, false);
+        opponentMonsterObj.transform.SetParent(_monsterPanel.transform, false);
         _opponentMonsterDisplay = opponentMonsterObj.AddComponent<MonsterDisplay>();
         
         RectTransform opponentMonsterRect = opponentMonsterObj.GetComponent<RectTransform>();
         opponentMonsterRect.anchorMin = new Vector2(0.55f, 0);
         opponentMonsterRect.anchorMax = new Vector2(1, 1);
-        opponentMonsterRect.offsetMin = Vector2.zero;
-        opponentMonsterRect.offsetMax = Vector2.zero;
+        opponentMonsterRect.offsetMin = new Vector2(10, 20);
+        opponentMonsterRect.offsetMax = new Vector2(-20, -20);
         
         // Create VS text in middle
         GameObject vsObj = new GameObject("VS");
-        vsObj.transform.SetParent(_monsterDisplay.transform, false);
+        vsObj.transform.SetParent(_monsterPanel.transform, false);
         TMP_Text vsText = vsObj.AddComponent<TextMeshProUGUI>();
         vsText.text = "VS";
-        vsText.fontSize = 24;
+        vsText.fontSize = 36;
+        vsText.fontStyle = FontStyles.Bold;
         vsText.alignment = TextAlignmentOptions.Center;
         vsText.color = Color.yellow;
         
@@ -437,190 +484,210 @@ public class GameUI : MonoBehaviour
         vsRect.offsetMin = Vector2.zero;
         vsRect.offsetMax = Vector2.zero;
         
-        // Initialize the monster displays with default monsters (to be safe)
+        // Initialize the monster displays with default monsters
         UpdateMonsterDisplays();
         
         GameManager.Instance.LogManager.LogMessage("Monster displays created");
     }
 
-    private void CreateRoundInfoPanel()
+    private void CreateTurnInfoUI()
     {
-        // Create round info panel at top center
-        _roundInfoPanel = CreateUIPanel("RoundInfoPanel", new Vector2(0.5f, 1), new Vector2(0.5f, 1), 
-                                        new Vector2(0.3f, 0.9f), new Vector2(0.7f, 0.99f));
+        // Create turn info panel at top
+        _turnInfoPanel = new GameObject("TurnInfoPanel");
+        _turnInfoPanel.transform.SetParent(_mainLayout.transform, false);
         
         // Background
-        Image bg = _roundInfoPanel.AddComponent<Image>();
-        bg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
+        Image turnInfoBg = _turnInfoPanel.AddComponent<Image>();
+        turnInfoBg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
         
-        // Round text
+        // Position at top
+        RectTransform turnInfoRect = _turnInfoPanel.GetComponent<RectTransform>();
+        turnInfoRect.anchorMin = new Vector2(0.25f, 1);
+        turnInfoRect.anchorMax = new Vector2(0.75f, 1);
+        turnInfoRect.pivot = new Vector2(0.5f, 1);
+        turnInfoRect.offsetMin = new Vector2(0, -80);
+        turnInfoRect.offsetMax = new Vector2(0, -20);
+        
+        // Round text on left
         GameObject roundObj = new GameObject("RoundText");
-        roundObj.transform.SetParent(_roundInfoPanel.transform, false);
+        roundObj.transform.SetParent(_turnInfoPanel.transform, false);
         _roundText = roundObj.AddComponent<TextMeshProUGUI>();
         _roundText.text = "Round 1";
-        _roundText.fontSize = 18;
+        _roundText.fontSize = 24;
+        _roundText.fontStyle = FontStyles.Bold;
         _roundText.alignment = TextAlignmentOptions.Center;
         _roundText.color = Color.white;
         
         RectTransform roundRect = roundObj.GetComponent<RectTransform>();
-        roundRect.anchorMin = new Vector2(0, 0.5f);
+        roundRect.anchorMin = new Vector2(0, 0);
         roundRect.anchorMax = new Vector2(0.5f, 1);
-        roundRect.offsetMin = Vector2.zero;
-        roundRect.offsetMax = Vector2.zero;
+        roundRect.offsetMin = new Vector2(20, 10);
+        roundRect.offsetMax = new Vector2(-10, -10);
         
-        // Turn info text
+        // Turn info on right
         GameObject turnObj = new GameObject("TurnInfoText");
-        turnObj.transform.SetParent(_roundInfoPanel.transform, false);
+        turnObj.transform.SetParent(_turnInfoPanel.transform, false);
         _turnInfoText = turnObj.AddComponent<TextMeshProUGUI>();
         _turnInfoText.text = "Your Turn";
-        _turnInfoText.fontSize = 18;
+        _turnInfoText.fontSize = 24;
+        _turnInfoText.fontStyle = FontStyles.Bold;
         _turnInfoText.alignment = TextAlignmentOptions.Center;
         _turnInfoText.color = Color.green;
         
         RectTransform turnRect = turnObj.GetComponent<RectTransform>();
-        turnRect.anchorMin = new Vector2(0.5f, 0.5f);
+        turnRect.anchorMin = new Vector2(0.5f, 0);
         turnRect.anchorMax = new Vector2(1, 1);
-        turnRect.offsetMin = Vector2.zero;
-        turnRect.offsetMax = Vector2.zero;
+        turnRect.offsetMin = new Vector2(10, 10);
+        turnRect.offsetMax = new Vector2(-20, -10);
         
-        GameManager.Instance.LogManager.LogMessage("Round info panel created");
-    }
-
-    private void CreateEndTurnButton()
-    {
-        // Create end turn button at bottom right
-        GameObject buttonObj = new GameObject("EndTurnButton");
-        buttonObj.transform.SetParent(_gameCanvas.transform, false);
-        _endTurnButton = buttonObj.AddComponent<Button>();
+        // End turn button
+        GameObject endTurnObj = new GameObject("EndTurnButton");
+        endTurnObj.transform.SetParent(_mainLayout.transform, false);
+        _endTurnButton = endTurnObj.AddComponent<Button>();
         
-        // Image
-        Image buttonImage = buttonObj.AddComponent<Image>();
-        buttonImage.color = new Color(0.7f, 0.2f, 0.2f);
+        // Button image
+        Image endTurnImage = endTurnObj.AddComponent<Image>();
+        endTurnImage.color = new Color(0.7f, 0.2f, 0.2f);
         
-        // Text
-        GameObject textObj = new GameObject("Text");
-        textObj.transform.SetParent(buttonObj.transform, false);
-        TMP_Text buttonText = textObj.AddComponent<TextMeshProUGUI>();
-        buttonText.text = "END TURN";
-        buttonText.fontSize = 16;
-        buttonText.alignment = TextAlignmentOptions.Center;
-        buttonText.color = Color.white;
+        // Button text
+        GameObject endTurnTextObj = new GameObject("Text");
+        endTurnTextObj.transform.SetParent(endTurnObj.transform, false);
+        TMP_Text endTurnText = endTurnTextObj.AddComponent<TextMeshProUGUI>();
+        endTurnText.text = "END TURN";
+        endTurnText.fontSize = 18;
+        endTurnText.fontStyle = FontStyles.Bold;
+        endTurnText.alignment = TextAlignmentOptions.Center;
+        endTurnText.color = Color.white;
         
-        RectTransform textRect = textObj.GetComponent<RectTransform>();
-        textRect.anchorMin = Vector2.zero;
-        textRect.anchorMax = Vector2.one;
-        textRect.offsetMin = Vector2.zero;
-        textRect.offsetMax = Vector2.zero;
+        RectTransform endTurnTextRect = endTurnTextObj.GetComponent<RectTransform>();
+        endTurnTextRect.anchorMin = Vector2.zero;
+        endTurnTextRect.anchorMax = Vector2.one;
+        endTurnTextRect.offsetMin = new Vector2(5, 5);
+        endTurnTextRect.offsetMax = new Vector2(-5, -5);
         
-        // Position
-        RectTransform buttonRect = buttonObj.GetComponent<RectTransform>();
-        buttonRect.anchorMin = new Vector2(0.9f, 0.01f);
-        buttonRect.anchorMax = new Vector2(0.99f, 0.1f);
-        buttonRect.offsetMin = Vector2.zero;
-        buttonRect.offsetMax = Vector2.zero;
+        // Position the button
+        RectTransform endTurnRect = endTurnObj.GetComponent<RectTransform>();
+        endTurnRect.anchorMin = new Vector2(1, 0);
+        endTurnRect.anchorMax = new Vector2(1, 0);
+        endTurnRect.pivot = new Vector2(1, 0);
+        endTurnRect.sizeDelta = new Vector2(180, 60);
+        endTurnRect.anchoredPosition = new Vector2(-40, 40);
         
-        // Event
+        // Button click event
         _endTurnButton.onClick.AddListener(OnEndTurnClicked);
         
-        GameManager.Instance.LogManager.LogMessage("End turn button created");
+        GameManager.Instance.LogManager.LogMessage("Turn info panel created");
     }
 
-    private GameObject CreateUIPanel(string name, Vector2 anchorMin, Vector2 anchorMax, Vector2 offsetMin, Vector2 offsetMax)
+    private void CreateHandUI()
     {
-        GameObject panel = new GameObject(name);
-        panel.transform.SetParent(_gameCanvas.transform, false);
+        // Create hand panel at bottom
+        _handPanel = new GameObject("HandPanel");
+        _handPanel.transform.SetParent(_mainLayout.transform, false);
         
-        RectTransform rect = panel.AddComponent<RectTransform>();
-        rect.anchorMin = anchorMin;
-        rect.anchorMax = anchorMax;
-        rect.offsetMin = new Vector2(offsetMin.x * Screen.width, offsetMin.y * Screen.height);
-        rect.offsetMax = new Vector2(offsetMax.x * Screen.width - Screen.width, offsetMax.y * Screen.height - Screen.height);
+        // Background
+        Image handBg = _handPanel.AddComponent<Image>();
+        handBg.color = new Color(0.1f, 0.1f, 0.2f, 0.8f);
         
-        return panel;
+        // Position at bottom
+        RectTransform handRect = _handPanel.GetComponent<RectTransform>();
+        handRect.anchorMin = new Vector2(0, 0);
+        handRect.anchorMax = new Vector2(1, 0);
+        handRect.pivot = new Vector2(0.5f, 0);
+        handRect.offsetMin = new Vector2(100, 20);
+        handRect.offsetMax = new Vector2(-100, 220);
+        
+        // Horizontal layout for cards
+        HorizontalLayoutGroup layout = _handPanel.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 10;
+        layout.padding = new RectOffset(20, 20, 10, 10);
+        layout.childAlignment = TextAnchor.MiddleCenter;
+        
+        // Content size fitter to adjust based on card count
+        ContentSizeFitter fitter = _handPanel.AddComponent<ContentSizeFitter>();
+        fitter.horizontalFit = ContentSizeFitter.FitMode.PreferredSize;
+        
+        GameManager.Instance.LogManager.LogMessage("Hand area created");
     }
 
     private void HideLobbyUI()
-{
-    // Hide the lobby UI elements when the game starts
-    var uiManager = GameManager.Instance.UIManager;
-    if (uiManager != null)
     {
-        // First try to find Canvas using GetComponent
-        Canvas canvas = uiManager.GetComponent<Canvas>();
-        
-        // If not found, look for it among children
-        if (canvas == null)
+        // Hide the lobby UI elements when the game starts
+        var uiManager = GameManager.Instance.UIManager;
+        if (uiManager != null)
         {
-            canvas = uiManager.GetComponentInChildren<Canvas>();
-        }
-        
-        // If still not found, try to find it in the scene
-        if (canvas == null)
-        {
-            canvas = FindObjectOfType<Canvas>();
-        }
-        
-        if (canvas != null)
-        {
-            // Try to find and hide the lobby panel
-            Transform lobbyPanel = canvas.transform.Find("Lobby Panel");
-            if (lobbyPanel != null)
-            {
-                lobbyPanel.gameObject.SetActive(false);
-                GameManager.Instance.LogManager.LogMessage("Lobby panel hidden");
-            }
-            
-            // Try to find and hide the connect panel
-            Transform connectPanel = canvas.transform.Find("Connect Panel");
-            if (connectPanel != null)
-            {
-                connectPanel.gameObject.SetActive(false);
-                GameManager.Instance.LogManager.LogMessage("Connect panel hidden");
-            }
-            
-            // Also hide game started panel if it exists
-            Transform gameStartedPanel = canvas.transform.Find("Game Started Panel");
-            if (gameStartedPanel != null)
-            {
-                gameStartedPanel.gameObject.SetActive(false);
-                GameManager.Instance.LogManager.LogMessage("Game started panel hidden");
-            }
-        }
-        else
-        {
-            // Direct approach: just call methods on UIManager
             try
             {
-                uiManager.HideConnectUI();
-                GameManager.Instance.LogManager.LogMessage("Called UIManager.HideConnectUI directly");
+                // Find canvases in the scene
+                Canvas[] canvases = FindObjectsOfType<Canvas>();
+                foreach (Canvas canvas in canvases)
+                {
+                    // Look for lobby UI objects
+                    Transform lobbyPanel = canvas.transform.Find("Lobby Panel");
+                    if (lobbyPanel != null)
+                    {
+                        lobbyPanel.gameObject.SetActive(false);
+                        GameManager.Instance.LogManager.LogMessage("Found and hidden lobby panel");
+                    }
+                    
+                    Transform connectPanel = canvas.transform.Find("Connect Panel");
+                    if (connectPanel != null)
+                    {
+                        connectPanel.gameObject.SetActive(false);
+                        GameManager.Instance.LogManager.LogMessage("Found and hidden connect panel");
+                    }
+                    
+                    Transform gameStartedPanel = canvas.transform.Find("Game Started Panel");
+                    if (gameStartedPanel != null)
+                    {
+                        gameStartedPanel.gameObject.SetActive(false);
+                        GameManager.Instance.LogManager.LogMessage("Found and hidden game started panel");
+                    }
+                }
+                
+                // Direct approach to hide using UIManager
+                try
+                {
+                    // Call HideConnectUI to ensure lobby is hidden
+                    uiManager.HideConnectUI();
+                    GameManager.Instance.LogManager.LogMessage("Called UIManager.HideConnectUI directly");
+                }
+                catch (Exception ex)
+                {
+                    GameManager.Instance.LogManager.LogError($"Error calling HideConnectUI: {ex.Message}");
+                }
             }
             catch (Exception ex)
             {
-                GameManager.Instance.LogManager.LogError($"Error calling HideConnectUI: {ex.Message}");
+                GameManager.Instance.LogManager.LogError($"Error hiding lobby UI: {ex.Message}");
             }
-            
-            GameManager.Instance.LogManager.LogError("UI Canvas not found, tried direct method");
         }
         
         GameManager.Instance.LogManager.LogMessage("Lobby UI hiding procedure completed");
     }
-}
 
     private void UpdateAllUI()
     {
         try {
             // Update all UI elements
             UpdatePlayerStats(_localPlayerState);
-            UpdateHand(_localPlayerState, _localPlayerState.GetHand());
+            UpdateHand(_localPlayerState, _localPlayerState?.GetHand() ?? new List<CardData>());
             UpdateOpponentDisplays();
             UpdateMonsterDisplays();
             
-            if (GameState.Instance != null) {
-                UpdateRoundInfo(GameState.Instance.CurrentRound);
-                UpdateTurnInfo(GameState.Instance.CurrentTurnPlayerIndex);
+            if (GameState.Instance != null && GameState.Instance.IsSpawned())
+            {
+                UpdateRoundInfo(GameState.Instance.GetCurrentRound());
+                UpdateTurnInfo(GameState.Instance.GetCurrentTurnPlayerIndex());
+            }
+            else
+            {
+                // Default values if GameState isn't available
+                UpdateRoundInfo(1);
+                UpdateTurnInfo(0);
             }
         }
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error updating UI: {ex.Message}");
         }
     }
@@ -648,7 +715,7 @@ public class GameUI : MonoBehaviour
                 _scoreText.text = $"Score: {playerState.GetScore()}";
             }
         } 
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error updating player stats: {ex.Message}");
             
             // Default values
@@ -660,7 +727,7 @@ public class GameUI : MonoBehaviour
 
     private void UpdateHand(PlayerState playerState, List<CardData> hand)
     {
-        if (playerState != _localPlayerState) return;
+        if (playerState != _localPlayerState || _handPanel == null) return;
         
         // Clear existing cards
         foreach (var display in _cardDisplays)
@@ -675,22 +742,12 @@ public class GameUI : MonoBehaviour
         // No cards in hand
         if (hand == null || hand.Count == 0) return;
         
-        // Calculate card layout
-        float cardWidth = 160f;
-        float spacing = 10f;
-        float totalWidth = hand.Count * cardWidth + (hand.Count - 1) * spacing;
-        float startX = -totalWidth / 2;
-        
         // Create card displays
         for (int i = 0; i < hand.Count; i++)
         {
             // Create card instance
-            GameObject cardObj = Instantiate(_cardPrefab, _handContainer.transform);
+            GameObject cardObj = Instantiate(_cardPrefab, _handPanel.transform);
             cardObj.SetActive(true);
-            
-            // Position card
-            RectTransform cardRect = cardObj.GetComponent<RectTransform>();
-            cardRect.anchoredPosition = new Vector2(startX + i * (cardWidth + spacing), 0);
             
             // Set card data
             CardDisplay display = cardObj.GetComponent<CardDisplay>();
@@ -701,6 +758,12 @@ public class GameUI : MonoBehaviour
             
             // Add click handler
             display.CardClicked += OnCardClicked;
+            
+            // Add layout element to control card size
+            LayoutElement layoutElement = cardObj.AddComponent<LayoutElement>();
+            layoutElement.preferredWidth = 180;
+            layoutElement.preferredHeight = 250;
+            layoutElement.flexibleWidth = 0;
         }
         
         GameManager.Instance.LogManager.LogMessage($"Updated hand with {hand.Count} cards");
@@ -745,7 +808,7 @@ public class GameUI : MonoBehaviour
             
             GameManager.Instance.LogManager.LogMessage($"Updated opponent displays for {_opponentDisplays.Count} opponents");
         }
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error updating opponent displays: {ex.Message}");
         }
     }
@@ -759,7 +822,7 @@ public class GameUI : MonoBehaviour
             Monster playerMonster = null;
             try { 
                 playerMonster = _localPlayerState.GetMonster();
-            } catch (System.Exception) { }
+            } catch (Exception) { }
             
             if (_playerMonsterDisplay != null && playerMonster != null)
             {
@@ -784,7 +847,7 @@ public class GameUI : MonoBehaviour
             Monster opponentMonster = null;
             try {
                 opponentMonster = _localPlayerState.GetOpponentMonster();
-            } catch (System.Exception) { }
+            } catch (Exception) { }
             
             if (_opponentMonsterDisplay != null && opponentMonster != null)
             {
@@ -805,7 +868,7 @@ public class GameUI : MonoBehaviour
                 _opponentMonsterDisplay.SetMonster(defaultOpponent);
             }
         }
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error updating monster displays: {ex.Message}");
         }
     }
@@ -848,7 +911,7 @@ public class GameUI : MonoBehaviour
                 }
             }
         }
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error updating turn info: {ex.Message}");
             
             // Default to not player's turn when error occurs
@@ -888,7 +951,7 @@ public class GameUI : MonoBehaviour
             _localPlayerState.PlayCard(cardIndex, target);
             GameManager.Instance.LogManager.LogMessage($"Card {card.Name} played against {(target != null ? target.Name : "self")}");
         }
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error playing card: {ex.Message}");
         }
     }
@@ -901,7 +964,7 @@ public class GameUI : MonoBehaviour
             _localPlayerState.EndTurn();
             GameManager.Instance.LogManager.LogMessage("Player ended turn");
         }
-        catch (System.Exception ex) {
+        catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error ending turn: {ex.Message}");
         }
     }
