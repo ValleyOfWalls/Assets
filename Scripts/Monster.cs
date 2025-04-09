@@ -1,8 +1,6 @@
 using System;
 using UnityEngine;
 
-
-
 // Monster class - represents both player pets and opponents
 [Serializable]
 public class Monster
@@ -30,6 +28,8 @@ public class Monster
     
     public void TakeDamage(int amount)
     {
+        if (amount <= 0) return;
+        
         int damageAfterBlock = amount;
         
         // Apply block if available
@@ -49,25 +49,55 @@ public class Monster
             OnBlockChanged?.Invoke(_block);
         }
         
-        // Apply remaining damage
+        // Apply remaining damage (reduced by defense)
         if (damageAfterBlock > 0)
         {
-            Health = Mathf.Max(0, Health - damageAfterBlock);
+            // Defense reduces damage by a percentage
+            float damageReduction = Defense / 100f;
+            int reducedDamage = Mathf.Max(1, Mathf.FloorToInt(damageAfterBlock * (1f - damageReduction)));
+            
+            Health = Mathf.Max(0, Health - reducedDamage);
             OnHealthChanged?.Invoke(Health, MaxHealth);
+            
+            // Log damage
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"{Name} took {reducedDamage} damage (reduced from {damageAfterBlock})");
         }
     }
     
     public void Heal(int amount)
     {
+        if (amount <= 0) return;
+        
         int newHealth = Mathf.Min(MaxHealth, Health + amount);
-        Health = newHealth;
-        OnHealthChanged?.Invoke(Health, MaxHealth);
+        int actualHeal = newHealth - Health;
+        
+        if (actualHeal > 0)
+        {
+            Health = newHealth;
+            OnHealthChanged?.Invoke(Health, MaxHealth);
+            
+            // Log healing
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"{Name} healed for {actualHeal} HP");
+        }
     }
     
     public void AddBlock(int amount)
     {
+        if (amount <= 0) return;
+        
         _block += amount;
         OnBlockChanged?.Invoke(_block);
+        
+        // Log block addition
+        if (GameManager.Instance != null)
+            GameManager.Instance.LogManager.LogMessage($"{Name} gained {amount} block, now has {_block} block");
+    }
+    
+    public int GetBlock()
+    {
+        return _block;
     }
     
     public bool IsDefeated()
@@ -83,6 +113,13 @@ public class Monster
         OnBlockChanged?.Invoke(_block);
     }
     
+    // Create a visual effect at the monster's position
+    public void CreateDamageEffect(Vector3 position, int amount, DamageEffectType effectType)
+    {
+        // This method would be implemented if you want to create visual effects
+        // directly from the monster class, but typically this would be handled by the UI
+    }
+    
     // AI can be implemented later
     public CardData ChooseAction()
     {
@@ -96,4 +133,26 @@ public class Monster
             DamageAmount = Attack
         };
     }
+    
+    // Update monster stats when leveling up
+    public void LevelUp(int healthBonus, int attackBonus, int defenseBonus)
+    {
+        MaxHealth += healthBonus;
+        Health += healthBonus;
+        Attack += attackBonus;
+        Defense += defenseBonus;
+        
+        OnHealthChanged?.Invoke(Health, MaxHealth);
+        
+        if (GameManager.Instance != null)
+            GameManager.Instance.LogManager.LogMessage($"{Name} leveled up! HP: +{healthBonus}, ATK: +{attackBonus}, DEF: +{defenseBonus}");
+    }
+}
+
+// Enum for different damage effect types
+public enum DamageEffectType
+{
+    Damage,
+    Heal,
+    Block
 }

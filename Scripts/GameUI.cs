@@ -187,37 +187,37 @@ public class GameUI : MonoBehaviour
     
     // Create display for a specific opponent
     private void CreateOpponentDisplay(PlayerRef playerRef, PlayerState playerState)
-{
-    if (_opponentsPanel == null || _opponentStatsPrefab == null) {
-        GameManager.Instance.LogManager.LogError("Cannot create opponent display: panel or prefab is null");
-        return;
-    }
-    
-    string playerName = playerState?.PlayerName.ToString() ?? "Unknown";
-    GameManager.Instance.LogManager.LogMessage($"Creating opponent display for {playerName}");
-    
-    // Create new display
-    GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
-    opponentObj.SetActive(true);
-    opponentObj.name = $"OpponentDisplay_{playerName}";
-    
-    OpponentStatsDisplay display = opponentObj.GetComponent<OpponentStatsDisplay>();
-    if (display != null)
     {
-        // Force create text elements if needed
-        display.ForceCreateTextElements();
+        if (_opponentsPanel == null || _opponentStatsPrefab == null) {
+            GameManager.Instance.LogManager.LogError("Cannot create opponent display: panel or prefab is null");
+            return;
+        }
         
-        // Store in the dictionary
-        _opponentDisplays[playerRef] = display;
+        string playerName = playerState?.PlayerName.ToString() ?? "Unknown";
+        GameManager.Instance.LogManager.LogMessage($"Creating opponent display for {playerName}");
         
-        // Update with player state
-        display.UpdateDisplay(playerState);
+        // Create new display
+        GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
+        opponentObj.SetActive(true);
+        opponentObj.name = $"OpponentDisplay_{playerName}";
+        
+        OpponentStatsDisplay display = opponentObj.GetComponent<OpponentStatsDisplay>();
+        if (display != null)
+        {
+            // Force create text elements if needed
+            display.ForceCreateTextElements();
+            
+            // Store in the dictionary
+            _opponentDisplays[playerRef] = display;
+            
+            // Update with player state
+            display.UpdateDisplay(playerState);
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogError("OpponentStatsDisplay component not found on instantiated prefab");
+        }
     }
-    else
-    {
-        GameManager.Instance.LogManager.LogError("OpponentStatsDisplay component not found on instantiated prefab");
-    }
-}
     
     // Update a specific opponent's display
     private void UpdateOpponentDisplay(PlayerRef playerRef, PlayerState playerState)
@@ -234,24 +234,30 @@ public class GameUI : MonoBehaviour
         }
     }
 
-    private void CreateMainCanvas()
-    {
-        // Create main canvas for game UI
-        GameObject canvasObj = new GameObject("GameCanvas");
-        _gameCanvas = canvasObj.AddComponent<Canvas>();
-        _gameCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-        _gameCanvas.sortingOrder = 10; // Ensure it's above other UI
-        
-        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
-        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920, 1080);
-        scaler.matchWidthOrHeight = 0.5f; // Balance width and height
-        
-        canvasObj.AddComponent<GraphicRaycaster>();
-        DontDestroyOnLoad(canvasObj);
-        
-        GameManager.Instance.LogManager.LogMessage("Game canvas created");
-    }
+private void CreateMainCanvas()
+{
+    // Create main canvas for game UI
+    GameObject canvasObj = new GameObject("GameCanvas");
+    _gameCanvas = canvasObj.AddComponent<Canvas>();
+    _gameCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+    _gameCanvas.sortingOrder = 10; // Ensure it's above other UI
+    
+    CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+    scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+    scaler.referenceResolution = new Vector2(1920, 1080);
+    scaler.matchWidthOrHeight = 0.5f; // Balance width and height
+    
+    // Make sure the GraphicRaycaster is added - essential for drag operations!
+    GraphicRaycaster raycaster = canvasObj.AddComponent<GraphicRaycaster>();
+    
+    DontDestroyOnLoad(canvasObj);
+    
+    // Add a debug log to verify canvas creation
+    Debug.Log($"Game canvas created: {_gameCanvas.name}");
+    
+    GameManager.Instance.LogManager.LogMessage("Game canvas created");
+}
+
 
     private void CreateMainLayout()
     {
@@ -274,92 +280,129 @@ public class GameUI : MonoBehaviour
     }
     
     private void CreateCardPrefab()
+{
+    // Create card prefab for hand display
+    _cardPrefab = new GameObject("CardPrefab");
+    _cardPrefab.SetActive(false);
+    
+    // Add RectTransform - essential for UI elements
+    RectTransform cardRect = _cardPrefab.AddComponent<RectTransform>();
+    cardRect.sizeDelta = new Vector2(180, 250);
+    
+    // Card background
+    Image cardBg = _cardPrefab.AddComponent<Image>();
+    cardBg.color = new Color(0.2f, 0.2f, 0.2f);
+    
+    // Add CardDisplay component
+    CardDisplay display = _cardPrefab.AddComponent<CardDisplay>();
+    
+    // Add CanvasGroup - required for drag operations
+    CanvasGroup canvasGroup = _cardPrefab.AddComponent<CanvasGroup>();
+    
+    // Create title text
+    GameObject titleObj = new GameObject("TitleText");
+    titleObj.transform.SetParent(_cardPrefab.transform, false);
+    TMP_Text titleText = titleObj.AddComponent<TextMeshProUGUI>();
+    titleText.fontSize = 16;
+    titleText.alignment = TextAlignmentOptions.Center;
+    titleText.color = Color.white;
+    
+    RectTransform titleRect = titleObj.GetComponent<RectTransform>();
+    titleRect.anchorMin = new Vector2(0, 0.85f);
+    titleRect.anchorMax = new Vector2(1, 1);
+    titleRect.offsetMin = Vector2.zero;
+    titleRect.offsetMax = Vector2.zero;
+    
+    // Create cost text
+    GameObject costObj = new GameObject("CostText");
+    costObj.transform.SetParent(_cardPrefab.transform, false);
+    TMP_Text costText = costObj.AddComponent<TextMeshProUGUI>();
+    costText.fontSize = 20;
+    costText.alignment = TextAlignmentOptions.Center;
+    costText.color = Color.yellow;
+    
+    // Add background circle for cost
+    GameObject costBgObj = new GameObject("CostBg");
+    costBgObj.transform.SetParent(costObj.transform, false);
+    costBgObj.transform.SetSiblingIndex(0);
+    Image costBg = costBgObj.AddComponent<Image>();
+    costBg.color = new Color(0.1f, 0.1f, 0.3f);
+    
+    RectTransform costBgRect = costBgObj.GetComponent<RectTransform>();
+    costBgRect.anchorMin = Vector2.zero;
+    costBgRect.anchorMax = Vector2.one;
+    costBgRect.offsetMin = new Vector2(-5, -5);
+    costBgRect.offsetMax = new Vector2(5, 5);
+    
+    RectTransform costRect = costObj.GetComponent<RectTransform>();
+    costRect.anchorMin = new Vector2(0, 0.9f);
+    costRect.anchorMax = new Vector2(0.2f, 1);
+    costRect.offsetMin = Vector2.zero;
+    costRect.offsetMax = Vector2.zero;
+    
+    // Create description text
+    GameObject descObj = new GameObject("DescriptionText");
+    descObj.transform.SetParent(_cardPrefab.transform, false);
+    TMP_Text descText = descObj.AddComponent<TextMeshProUGUI>();
+    descText.fontSize = 14;
+    descText.alignment = TextAlignmentOptions.Center;
+    descText.color = Color.white;
+    
+    RectTransform descRect = descObj.GetComponent<RectTransform>();
+    descRect.anchorMin = new Vector2(0.1f, 0.2f);
+    descRect.anchorMax = new Vector2(0.9f, 0.6f);
+    descRect.offsetMin = Vector2.zero;
+    descRect.offsetMax = Vector2.zero;
+    
+    // Set references in CardDisplay
+    display.SetTextElements(titleText, costText, descText);
+    
+    // Add button for interactivity
+    Button cardButton = _cardPrefab.AddComponent<Button>();
+    ColorBlock colors = cardButton.colors;
+    colors.highlightedColor = new Color(0.8f, 0.8f, 1f);
+    colors.pressedColor = new Color(0.7f, 0.7f, 0.9f);
+    cardButton.colors = colors;
+    
+    // Set up the button click handler
+    display.SetButton(cardButton);
+    
+    GameManager.Instance.LogManager.LogMessage("Card prefab created");
+}
+
+    
+    // New method to set up drag-and-drop on card prefab
+    // This is a partial update with just the method that needs fixing in GameUI.cs
+
+// Replace the old SetupCardDragAndDrop method with this one
+private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
+{
+    // Use the new method name: InitializeDragOperation instead of SetCanvas
+    if (_gameCanvas != null)
     {
-        // Create card prefab for hand display
-        _cardPrefab = new GameObject("CardPrefab");
-        _cardPrefab.SetActive(false);
-        
-        // Card background
-        Image cardBg = _cardPrefab.AddComponent<Image>();
-        cardBg.color = new Color(0.2f, 0.2f, 0.2f);
-        
-        // Card layout
-        RectTransform cardRect = _cardPrefab.GetComponent<RectTransform>();
-        cardRect.sizeDelta = new Vector2(180, 250);
-        
-        // Add CardDisplay component
-        CardDisplay display = _cardPrefab.AddComponent<CardDisplay>();
-        
-        // Create title text
-        GameObject titleObj = new GameObject("TitleText");
-        titleObj.transform.SetParent(_cardPrefab.transform, false);
-        TMP_Text titleText = titleObj.AddComponent<TextMeshProUGUI>();
-        titleText.fontSize = 16;
-        titleText.alignment = TextAlignmentOptions.Center;
-        titleText.color = Color.white;
-        
-        RectTransform titleRect = titleObj.GetComponent<RectTransform>();
-        titleRect.anchorMin = new Vector2(0, 0.85f);
-        titleRect.anchorMax = new Vector2(1, 1);
-        titleRect.offsetMin = Vector2.zero;
-        titleRect.offsetMax = Vector2.zero;
-        
-        // Create cost text
-        GameObject costObj = new GameObject("CostText");
-        costObj.transform.SetParent(_cardPrefab.transform, false);
-        TMP_Text costText = costObj.AddComponent<TextMeshProUGUI>();
-        costText.fontSize = 20;
-        costText.alignment = TextAlignmentOptions.Center;
-        costText.color = Color.yellow;
-        
-        // Add background circle for cost
-        GameObject costBgObj = new GameObject("CostBg");
-        costBgObj.transform.SetParent(costObj.transform, false);
-        costBgObj.transform.SetSiblingIndex(0);
-        Image costBg = costBgObj.AddComponent<Image>();
-        costBg.color = new Color(0.1f, 0.1f, 0.3f);
-        
-        RectTransform costBgRect = costBgObj.GetComponent<RectTransform>();
-        costBgRect.anchorMin = Vector2.zero;
-        costBgRect.anchorMax = Vector2.one;
-        costBgRect.offsetMin = new Vector2(-5, -5);
-        costBgRect.offsetMax = new Vector2(5, 5);
-        
-        RectTransform costRect = costObj.GetComponent<RectTransform>();
-        costRect.anchorMin = new Vector2(0, 0.9f);
-        costRect.anchorMax = new Vector2(0.2f, 1);
-        costRect.offsetMin = Vector2.zero;
-        costRect.offsetMax = Vector2.zero;
-        
-        // Create description text
-        GameObject descObj = new GameObject("DescriptionText");
-        descObj.transform.SetParent(_cardPrefab.transform, false);
-        TMP_Text descText = descObj.AddComponent<TextMeshProUGUI>();
-        descText.fontSize = 14;
-        descText.alignment = TextAlignmentOptions.Center;
-        descText.color = Color.white;
-        
-        RectTransform descRect = descObj.GetComponent<RectTransform>();
-        descRect.anchorMin = new Vector2(0.1f, 0.2f);
-        descRect.anchorMax = new Vector2(0.9f, 0.6f);
-        descRect.offsetMin = Vector2.zero;
-        descRect.offsetMax = Vector2.zero;
-        
-        // Set references in CardDisplay
-        display.SetTextElements(titleText, costText, descText);
-        
-        // Add button for interactivity
-        Button cardButton = _cardPrefab.AddComponent<Button>();
-        ColorBlock colors = cardButton.colors;
-        colors.highlightedColor = new Color(0.8f, 0.8f, 1f);
-        colors.pressedColor = new Color(0.7f, 0.7f, 0.9f);
-        cardButton.colors = colors;
-        
-        // Set up the button click handler
-        display.SetButton(cardButton);
-        
-        GameManager.Instance.LogManager.LogMessage("Card prefab created");
+        display.InitializeDragOperation(_gameCanvas);
+        Debug.Log($"Drag operation initialized for card {cardObj.name}");
     }
+    else
+    {
+        Debug.LogError("Game canvas is null when setting up card drag!");
+        
+        // Try to find the canvas as a fallback
+        Canvas foundCanvas = FindObjectOfType<Canvas>();
+        if (foundCanvas != null)
+        {
+            display.InitializeDragOperation(foundCanvas);
+            Debug.Log("Using fallback canvas for card drag operations");
+        }
+        else
+        {
+            Debug.LogError("No canvas found in the scene. Drag operations will fail!");
+        }
+    }
+    
+    // Subscribe to card played event
+    display.CardPlayed += OnCardPlayedOnTarget;
+}
 
     private void CreatePlayerUI()
     {
@@ -825,48 +868,98 @@ public class GameUI : MonoBehaviour
     }
 
     private void UpdateHand(PlayerState playerState, List<CardData> hand)
+{
+    if (playerState != _localPlayerState || _handPanel == null) return;
+    
+    // Clear existing cards
+    foreach (var display in _cardDisplays)
     {
-        if (playerState != _localPlayerState || _handPanel == null) return;
-        
-        // Clear existing cards
-        foreach (var display in _cardDisplays)
+        if (display != null && display.gameObject != null)
         {
-            if (display != null && display.gameObject != null)
-            {
-                Destroy(display.gameObject);
-            }
+            // Unsubscribe from events
+            display.CardClicked -= OnCardClicked;
+            display.CardPlayed -= OnCardPlayedOnTarget;
+            
+            Destroy(display.gameObject);
         }
-        _cardDisplays.Clear();
-        
-        // No cards in hand
-        if (hand == null || hand.Count == 0) return;
-        
-        // Create card displays
-        for (int i = 0; i < hand.Count; i++)
-        {
-            // Create card instance
-            GameObject cardObj = Instantiate(_cardPrefab, _handPanel.transform);
-            cardObj.SetActive(true);
-            
-            // Set card data
-            CardDisplay display = cardObj.GetComponent<CardDisplay>();
-            display.SetCardData(hand[i], i);
-            
-            // Add to list
-            _cardDisplays.Add(display);
-            
-            // Add click handler
-            display.CardClicked += OnCardClicked;
-            
-            // Add layout element to control card size
-            LayoutElement layoutElement = cardObj.AddComponent<LayoutElement>();
-            layoutElement.preferredWidth = 180;
-            layoutElement.preferredHeight = 250;
-            layoutElement.flexibleWidth = 0;
-        }
-        
-        GameManager.Instance.LogManager.LogMessage($"Updated hand with {hand.Count} cards");
     }
+    _cardDisplays.Clear();
+    
+    // No cards in hand
+    if (hand == null || hand.Count == 0) return;
+    
+    // Log for debugging
+    Debug.Log($"Creating {hand.Count} cards in hand. Canvas: {(_gameCanvas != null ? _gameCanvas.name : "null")}");
+    
+    // Create card displays
+    for (int i = 0; i < hand.Count; i++)
+    {
+        // Create card instance
+        GameObject cardObj = Instantiate(_cardPrefab, _handPanel.transform);
+        cardObj.SetActive(true);
+        cardObj.name = $"Card_{hand[i].Name}_{i}";  // Naming for debugging
+        
+        // Set card data
+        CardDisplay display = cardObj.GetComponent<CardDisplay>();
+        
+        // Critical: Properly initialize the drag operations FIRST
+        InitializeCardDragOperation(display);
+        
+        // Then set the data
+        display.SetCardData(hand[i], i);
+        
+        // Add to list
+        _cardDisplays.Add(display);
+        
+        // Add click handler
+        display.CardClicked += OnCardClicked;
+        display.CardPlayed += OnCardPlayedOnTarget;
+        
+        // Add layout element to control card size
+        LayoutElement layoutElement = cardObj.GetComponent<LayoutElement>();
+        if (layoutElement == null)
+        {
+            layoutElement = cardObj.AddComponent<LayoutElement>();
+        }
+        layoutElement.preferredWidth = 180;
+        layoutElement.preferredHeight = 250;
+        layoutElement.flexibleWidth = 0;
+        
+        // Debug verification
+        Debug.Log($"Card {cardObj.name} created and initialized");
+    }
+    
+    GameManager.Instance.LogManager.LogMessage($"Updated hand with {hand.Count} cards");
+}
+
+
+private void InitializeCardDragOperation(CardDisplay display)
+{
+    if (display == null)
+    {
+        Debug.LogError("Attempted to initialize null CardDisplay");
+        return;
+    }
+    
+    if (_gameCanvas == null)
+    {
+        Debug.LogError("Game canvas is null when initializing card drag!");
+        // Try to find the canvas
+        _gameCanvas = FindObjectOfType<Canvas>();
+        if (_gameCanvas == null)
+        {
+            Debug.LogError("Could not find any canvas in the scene. Drag operations will fail!");
+            return;
+        }
+    }
+    
+    // Initialize the card drag operation with the proper canvas
+    display.InitializeDragOperation(_gameCanvas);
+    
+    // Debug log
+    Debug.Log($"Card drag initialized with canvas: {_gameCanvas.name}");
+}
+
 
     private void UpdateOpponentDisplays()
     {
@@ -1056,6 +1149,161 @@ public class GameUI : MonoBehaviour
         catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error playing card: {ex.Message}");
         }
+    }
+    
+    // New method to handle cards played on targets via drag-and-drop
+    private void OnCardPlayedOnTarget(CardDisplay display, GameObject targetObj)
+    {
+        if (GameState.Instance == null || !GameState.Instance.IsLocalPlayerTurn()) return;
+        
+        CardData card = display.GetCardData();
+        int cardIndex = display.GetCardIndex();
+        
+        // Determine the target based on the target object
+        Monster target = null;
+        
+        // Handle monster targets
+        MonsterDisplay monsterDisplay = targetObj.GetComponent<MonsterDisplay>();
+        if (monsterDisplay != null)
+        {
+            // Determine if it's the player's monster or opponent's monster
+            bool isOpponentMonster = targetObj.name.Contains("Opponent");
+            
+            if (isOpponentMonster)
+            {
+                // Target is the opponent's monster
+                target = _localPlayerState.GetOpponentMonster();
+            }
+            else
+            {
+                // Target is the player's own monster
+                target = _localPlayerState.GetMonster();
+            }
+        }
+        
+        // Play the card if we have a valid target
+        if ((target != null && (card.Target == CardTarget.Enemy || card.Target == CardTarget.AllEnemies || 
+                           card.Target == CardTarget.All)) ||
+        (card.Target == CardTarget.Self || card.Target == CardTarget.All))
+        {
+            try {
+                _localPlayerState.PlayCard(cardIndex, target);
+                GameManager.Instance.LogManager.LogMessage($"Card {card.Name} played against {(target != null ? target.Name : "self")}");
+                
+                // Play visual effect
+                PlayCardVisualEffect(display, targetObj);
+            }
+            catch (Exception ex) {
+                GameManager.Instance.LogManager.LogMessage($"Error playing card: {ex.Message}");
+            }
+        }
+    }
+    
+    // New method to create visual effects when playing cards
+    private void PlayCardVisualEffect(CardDisplay display, GameObject targetObj)
+    {
+        CardData card = display.GetCardData();
+        
+        // Create a visual effect based on card type
+        GameObject effectObj = new GameObject("CardEffect");
+        effectObj.transform.SetParent(_gameCanvas.transform, false);
+        
+        // Position at the target
+        RectTransform effectRect = effectObj.AddComponent<RectTransform>();
+        effectRect.position = targetObj.transform.position;
+        effectRect.sizeDelta = new Vector2(100, 100);
+        
+        // Add image component for the effect
+        Image effectImage = effectObj.AddComponent<Image>();
+        
+        // Set color based on card type
+        switch (card.Type)
+        {
+            case CardType.Attack:
+                effectImage.color = new Color(1f, 0.3f, 0.3f, 0.7f);
+                break;
+            case CardType.Skill:
+                effectImage.color = new Color(0.3f, 0.7f, 1f, 0.7f);
+                break;
+            case CardType.Power:
+                effectImage.color = new Color(0.8f, 0.5f, 1f, 0.7f);
+                break;
+        }
+        
+        // Add text to show the amount
+        GameObject textObj = new GameObject("EffectText");
+        textObj.transform.SetParent(effectObj.transform, false);
+        
+        TMP_Text effectText = textObj.AddComponent<TextMeshProUGUI>();
+        effectText.alignment = TextAlignmentOptions.Center;
+        effectText.fontSize = 24;
+        effectText.fontStyle = FontStyles.Bold;
+        
+        // Set the text based on card effect
+        if (card.DamageAmount > 0)
+        {
+            effectText.text = $"-{card.DamageAmount}";
+            effectText.color = Color.white;
+        }
+        else if (card.BlockAmount > 0)
+        {
+            effectText.text = $"+{card.BlockAmount}";
+            effectText.color = Color.cyan;
+        }
+        else if (card.HealAmount > 0)
+        {
+            effectText.text = $"+{card.HealAmount}";
+            effectText.color = Color.green;
+        }
+        
+        // Position the text
+        RectTransform textRect = textObj.GetComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = Vector2.zero;
+        textRect.offsetMax = Vector2.zero;
+        
+        // Animate and destroy the effect
+        StartCoroutine(AnimateCardEffect(effectObj));
+    }
+    
+    // New coroutine to animate the card effect
+    private IEnumerator AnimateCardEffect(GameObject effectObj)
+    {
+        RectTransform rectTransform = effectObj.GetComponent<RectTransform>();
+        Image image = effectObj.GetComponent<Image>();
+        
+        float duration = 1.0f;
+        float elapsed = 0f;
+        Vector2 startSize = rectTransform.sizeDelta;
+        Vector2 endSize = startSize * 1.5f;
+        Color startColor = image.color;
+        Color endColor = new Color(startColor.r, startColor.g, startColor.b, 0f);
+        
+        while (elapsed < duration)
+        {
+            float t = elapsed / duration;
+            
+            // Scale up
+            rectTransform.sizeDelta = Vector2.Lerp(startSize, endSize, t);
+            
+            // Fade out
+            image.color = Color.Lerp(startColor, endColor, t);
+            
+            // Update text color too
+            TMP_Text text = effectObj.GetComponentInChildren<TMP_Text>();
+            if (text != null)
+            {
+                Color textColor = text.color;
+                text.color = new Color(textColor.r, textColor.g, textColor.b, 1f - t);
+            }
+            
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        
+        // Destroy the effect object
+        Destroy(effectObj);
     }
 
     private void OnEndTurnClicked()

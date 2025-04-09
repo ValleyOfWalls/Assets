@@ -1,20 +1,27 @@
 using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using TMPro;
 
-
-// Display monster in the monster area
-public class MonsterDisplay : MonoBehaviour
+// Display monster in the monster area with targeting support
+public class MonsterDisplay : MonoBehaviour, IDropHandler
 {
     // References
     private TMP_Text _nameText;
     private TMP_Text _healthText;
     private Image _monsterImage;
     private Slider _healthBar;
+    private Image _blockImage;
+    private TMP_Text _blockText;
     
     // Data
     private Monster _monster;
+    private int _currentBlock = 0;
+    
+    // Visual feedback
+    private Image _highlightImage;
     
     private void Awake()
     {
@@ -23,8 +30,25 @@ public class MonsterDisplay : MonoBehaviour
     
     private void CreateVisuals()
     {
-        // Create background
-        gameObject.AddComponent<Image>().color = new Color(0.2f, 0.2f, 0.2f, 0.5f);
+        // Make sure we have an Image component for the background
+        Image backgroundImage = GetComponent<Image>();
+        if (backgroundImage == null)
+        {
+            backgroundImage = gameObject.AddComponent<Image>();
+        }
+        backgroundImage.color = new Color(0.2f, 0.2f, 0.2f, 0.5f);
+        
+        // Create highlight for targeting feedback
+        GameObject highlightObj = new GameObject("Highlight");
+        highlightObj.transform.SetParent(transform, false);
+        _highlightImage = highlightObj.AddComponent<Image>();
+        _highlightImage.color = new Color(1f, 1f, 0.5f, 0.0f); // Start invisible
+        
+        RectTransform highlightRect = highlightObj.GetComponent<RectTransform>();
+        highlightRect.anchorMin = Vector2.zero;
+        highlightRect.anchorMax = Vector2.one;
+        highlightRect.offsetMin = new Vector2(-10, -10);
+        highlightRect.offsetMax = new Vector2(10, 10);
         
         // Create monster image
         GameObject imageObj = new GameObject("MonsterImage");
@@ -108,6 +132,37 @@ public class MonsterDisplay : MonoBehaviour
         _healthBar.targetGraphic = barBgImage;
         _healthBar.fillRect = barFillRect;
         
+        // Create block display
+        GameObject blockObj = new GameObject("BlockDisplay");
+        blockObj.transform.SetParent(transform, false);
+        
+        // Block background
+        _blockImage = blockObj.AddComponent<Image>();
+        _blockImage.color = new Color(0.2f, 0.6f, 0.8f, 0.8f);
+        _blockImage.enabled = false; // Start hidden
+        
+        RectTransform blockRect = blockObj.GetComponent<RectTransform>();
+        blockRect.anchorMin = new Vector2(0.8f, 0.8f);
+        blockRect.anchorMax = new Vector2(1, 1);
+        blockRect.offsetMin = new Vector2(0, 0);
+        blockRect.offsetMax = new Vector2(0, 10);
+        
+        // Block text
+        GameObject blockTextObj = new GameObject("BlockText");
+        blockTextObj.transform.SetParent(blockObj.transform, false);
+        _blockText = blockTextObj.AddComponent<TextMeshProUGUI>();
+        _blockText.text = "0";
+        _blockText.fontSize = 18;
+        _blockText.fontStyle = FontStyles.Bold;
+        _blockText.alignment = TextAlignmentOptions.Center;
+        _blockText.color = Color.white;
+        
+        RectTransform blockTextRect = blockTextObj.GetComponent<RectTransform>();
+        blockTextRect.anchorMin = Vector2.zero;
+        blockTextRect.anchorMax = Vector2.one;
+        blockTextRect.offsetMin = Vector2.zero;
+        blockTextRect.offsetMax = Vector2.zero;
+        
         // Create default circle sprite for monster
         _monsterImage.sprite = CreateDefaultSprite();
     }
@@ -141,7 +196,18 @@ public class MonsterDisplay : MonoBehaviour
     
     public void SetMonster(Monster monster)
     {
-        if (monster == null) return;
+        if (monster == null)
+        {
+            Debug.LogWarning("Tried to set null monster in MonsterDisplay");
+            return;
+        }
+        
+        // Unsubscribe from previous monster events if any
+        if (_monster != null)
+        {
+            _monster.OnHealthChanged -= UpdateHealth;
+            _monster.OnBlockChanged -= UpdateBlock;
+        }
         
         _monster = monster;
         
@@ -172,6 +238,10 @@ public class MonsterDisplay : MonoBehaviour
         
         // Subscribe to monster events
         monster.OnHealthChanged += UpdateHealth;
+        monster.OnBlockChanged += UpdateBlock;
+        
+        // Initial block update
+        UpdateBlock(monster.GetBlock());
     }
     
     private void UpdateHealth(int health, int maxHealth)
@@ -185,7 +255,72 @@ public class MonsterDisplay : MonoBehaviour
         // Update health bar
         if (_healthBar != null)
         {
+            _healthBar.maxValue = maxHealth;
             _healthBar.value = health;
+        }
+        
+        // Visual feedback for damage
+        StartCoroutine(FlashDamage());
+    }
+    
+    private void UpdateBlock(int block)
+    {
+        _currentBlock = block;
+        
+        // Show/hide block display
+        if (_blockImage != null)
+        {
+            _blockImage.enabled = block > 0;
+        }
+        
+        // Update block text
+        if (_blockText != null)
+        {
+            _blockText.text = block.ToString();
+        }
+    }
+    
+    private IEnumerator FlashDamage()
+    {
+        // Flash red when taking damage
+        Image background = GetComponent<Image>();
+        if (background == null)
+        {
+            yield break;
+        }
+        
+        Color originalColor = background.color;
+        background.color = new Color(0.8f, 0.2f, 0.2f, 0.8f);
+        
+        yield return new WaitForSeconds(0.1f);
+        
+        background.color = originalColor;
+    }
+    
+    // Handle card dropping on monster
+    public void OnDrop(PointerEventData eventData)
+    {
+        // Safety check for null eventData
+        if (eventData == null || eventData.pointerDrag == null) 
+        {
+            return;
+        }
+        
+        // Check if a card was dropped on this monster
+        GameObject droppedObject = eventData.pointerDrag;
+        CardDisplay cardDisplay = droppedObject.GetComponent<CardDisplay>();
+        if (cardDisplay == null) return;
+        
+        // Card dropped event will be handled by the CardDisplay component
+        ShowHighlight(false);
+    }
+    
+    // Show highlight when valid card is dragged over
+    public void ShowHighlight(bool show)
+    {
+        if (_highlightImage != null)
+        {
+            _highlightImage.color = new Color(1f, 1f, 0.5f, show ? 0.5f : 0f);
         }
     }
     
@@ -194,6 +329,13 @@ public class MonsterDisplay : MonoBehaviour
         if (_monster != null)
         {
             _monster.OnHealthChanged -= UpdateHealth;
+            _monster.OnBlockChanged -= UpdateBlock;
         }
+    }
+    
+    // Get the monster data
+    public Monster GetMonster()
+    {
+        return _monster;
     }
 }
