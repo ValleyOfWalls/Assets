@@ -1,9 +1,10 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
-using Fusion;  // Added Fusion namespace for PlayerRef
-using System.Collections; // Added for coroutines
+using Fusion;
 
 public class GameUI : MonoBehaviour
 {
@@ -539,46 +540,71 @@ public class GameUI : MonoBehaviour
     }
 
     private void HideLobbyUI()
+{
+    // Hide the lobby UI elements when the game starts
+    var uiManager = GameManager.Instance.UIManager;
+    if (uiManager != null)
     {
-        // Hide the lobby UI elements when the game starts
-        var uiManager = GameManager.Instance.UIManager;
-        if (uiManager != null)
+        // First try to find Canvas using GetComponent
+        Canvas canvas = uiManager.GetComponent<Canvas>();
+        
+        // If not found, look for it among children
+        if (canvas == null)
         {
-            // FIXED: Don't call ShowConnectUI, instead directly hide both panels
-            // Find the canvas
-            Transform canvas = uiManager.transform.Find("UI Canvas");
-            if (canvas != null)
+            canvas = uiManager.GetComponentInChildren<Canvas>();
+        }
+        
+        // If still not found, try to find it in the scene
+        if (canvas == null)
+        {
+            canvas = FindObjectOfType<Canvas>();
+        }
+        
+        if (canvas != null)
+        {
+            // Try to find and hide the lobby panel
+            Transform lobbyPanel = canvas.transform.Find("Lobby Panel");
+            if (lobbyPanel != null)
             {
-                Transform lobbyPanel = canvas.Find("Lobby Panel");
-                if (lobbyPanel != null)
-                {
-                    lobbyPanel.gameObject.SetActive(false);
-                    GameManager.Instance.LogManager.LogMessage("Lobby panel hidden");
-                }
-                
-                Transform connectPanel = canvas.Find("Connect Panel");
-                if (connectPanel != null)
-                {
-                    connectPanel.gameObject.SetActive(false);
-                    GameManager.Instance.LogManager.LogMessage("Connect panel hidden");
-                }
-                
-                // Also hide game started panel if it exists
-                Transform gameStartedPanel = canvas.Find("Game Started Panel");
-                if (gameStartedPanel != null)
-                {
-                    gameStartedPanel.gameObject.SetActive(false);
-                    GameManager.Instance.LogManager.LogMessage("Game started panel hidden");
-                }
-            }
-            else
-            {
-                GameManager.Instance.LogManager.LogError("UI Canvas not found!");
+                lobbyPanel.gameObject.SetActive(false);
+                GameManager.Instance.LogManager.LogMessage("Lobby panel hidden");
             }
             
-            GameManager.Instance.LogManager.LogMessage("Lobby UI hidden");
+            // Try to find and hide the connect panel
+            Transform connectPanel = canvas.transform.Find("Connect Panel");
+            if (connectPanel != null)
+            {
+                connectPanel.gameObject.SetActive(false);
+                GameManager.Instance.LogManager.LogMessage("Connect panel hidden");
+            }
+            
+            // Also hide game started panel if it exists
+            Transform gameStartedPanel = canvas.transform.Find("Game Started Panel");
+            if (gameStartedPanel != null)
+            {
+                gameStartedPanel.gameObject.SetActive(false);
+                GameManager.Instance.LogManager.LogMessage("Game started panel hidden");
+            }
         }
+        else
+        {
+            // Direct approach: just call methods on UIManager
+            try
+            {
+                uiManager.HideConnectUI();
+                GameManager.Instance.LogManager.LogMessage("Called UIManager.HideConnectUI directly");
+            }
+            catch (Exception ex)
+            {
+                GameManager.Instance.LogManager.LogError($"Error calling HideConnectUI: {ex.Message}");
+            }
+            
+            GameManager.Instance.LogManager.LogError("UI Canvas not found, tried direct method");
+        }
+        
+        GameManager.Instance.LogManager.LogMessage("Lobby UI hiding procedure completed");
     }
+}
 
     private void UpdateAllUI()
     {

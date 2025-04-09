@@ -35,6 +35,9 @@ public class GameState : NetworkBehaviour
 
     // Card collections
     private List<CardData> _draftPool = new List<CardData>();
+    
+    // Flag to track if we're already networked
+    private bool _isNetworked = false;
 
     // Called when the component is first initialized
     private void Awake()
@@ -66,6 +69,31 @@ public class GameState : NetworkBehaviour
             {
                 GameManager.Instance.LogManager.LogMessage("Multiple GameState instances detected!");
             }
+        }
+    }
+    
+    // Call this when the game starts to network the GameState
+    public void NetworkGameState()
+    {
+        if (_isNetworked) return;
+        
+        // Get network runner
+        var runner = GameManager.Instance.NetworkManager.GetRunner();
+        if (runner == null) return;
+        
+        // Add a NetworkObject component if it doesn't exist
+        NetworkObject networkObject = GetComponent<NetworkObject>();
+        if (networkObject == null)
+        {
+            networkObject = gameObject.AddComponent<NetworkObject>();
+        }
+        
+        // Network this object
+        if (runner.IsRunning)
+        {
+            runner.Spawn(networkObject);
+            _isNetworked = true;
+            GameManager.Instance.LogManager.LogMessage("GameState networked successfully");
         }
     }
 

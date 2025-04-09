@@ -1,9 +1,9 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using Fusion;
 using UnityEngine;
 
-// This class handles player-specific state within the game
 public class PlayerState : NetworkBehaviour
 {
     // Stats (networked)
@@ -46,10 +46,28 @@ public class PlayerState : NetworkBehaviour
             Score = 0;
             
             // Get name from the Player component
-            Player playerComponent = GetComponent<Player>();
-            if (playerComponent != null)
+            var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
+            if (networkRunner != null)
             {
-                PlayerName = playerComponent.GetPlayerName();
+                Player playerComponent = null;
+                NetworkObject playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(Object.InputAuthority);
+                
+                if (playerObject != null)
+                {
+                    playerComponent = playerObject.GetComponent<Player>();
+                }
+                
+                if (playerComponent != null)
+                {
+                    PlayerName = playerComponent.GetPlayerName();
+                    GameManager.Instance.LogManager.LogMessage($"PlayerState set name to: {PlayerName}");
+                }
+                else
+                {
+                    // Fallback to default name
+                    PlayerName = $"Player_{Object.InputAuthority.PlayerId}";
+                    GameManager.Instance.LogManager.LogMessage($"PlayerState using default name: {PlayerName}");
+                }
             }
             
             // Initialize the player's monster
@@ -61,12 +79,51 @@ public class PlayerState : NetworkBehaviour
         
         GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for {PlayerName}");
         
-        // Register with GameState if available
-        if (Runner != null && Object != null && Object.HasInputAuthority)
+        // Attempt to register with GameState if available, otherwise schedule for later
+        AttemptRegisterWithGameState();
+        
+        // Start a coroutine to keep trying to register with GameState if it's not available yet
+        StartCoroutine(RegisterWithGameStateWhenAvailable());
+    }
+
+    // New method - Try to register with GameState
+    private void AttemptRegisterWithGameState()
+    {
+        if (Runner != null && Object != null)
         {
             if (GameState.Instance != null)
-                GameState.Instance.RegisterPlayer(Runner.LocalPlayer, this);
+            {
+                GameState.Instance.RegisterPlayer(Object.InputAuthority, this);
+                GameManager.Instance.LogManager.LogMessage($"PlayerState registered with GameState for player {Object.InputAuthority}");
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogMessage("GameState.Instance is currently null, will try to register later");
+            }
         }
+    }
+
+    // New coroutine - Keep trying to register until successful
+    private IEnumerator RegisterWithGameStateWhenAvailable()
+    {
+        float timeoutSeconds = 30.0f; // Set a reasonable timeout
+        float startTime = Time.time;
+        
+        // Keep trying until we succeed or timeout
+        while (GameState.Instance == null)
+        {
+            yield return new WaitForSeconds(0.5f); // Check every half second
+            
+            // Check for timeout
+            if (Time.time - startTime > timeoutSeconds)
+            {
+                GameManager.Instance.LogManager.LogError("Timed out waiting for GameState.Instance to become available");
+                yield break;
+            }
+        }
+        
+        // GameState is now available, register with it
+        AttemptRegisterWithGameState();
     }
 
     private void InitializeMonster()
@@ -316,18 +373,18 @@ public class PlayerState : NetworkBehaviour
     }
 
     public void ModifyHealth(int amount)
+{
+    if (!HasStateAuthority) return;
+    
+    Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
+    OnStatsChanged?.Invoke(this);
+    
+    if (Health <= 0)
     {
-        if (!HasStateAuthority) return;
-        
-        Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
-        OnStatsChanged?.Invoke(this);
-        
-        if (Health <= 0)
-        {
-            GameManager.Instance.LogManager.LogMessage($"{PlayerName} has been defeated!");
-            // Handle player defeat
-        }
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} has been defeated!");
+        // Handle player defeat
     }
+}
 
     public void ModifyEnergy(int amount)
     {

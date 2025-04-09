@@ -263,6 +263,10 @@ public class Player : NetworkBehaviour
     {
         // Create a grid-based positioning system
         int playerCount = GameManager.Instance.PlayerManager.GetPlayerCount();
+        
+        // FIXED: Ensure playerCount is at least 1 to avoid division by zero
+        if (playerCount <= 0) playerCount = 1;
+        
         int index = playerCount - 1; // 0-based index
         
         // Define grid dimensions based on player count

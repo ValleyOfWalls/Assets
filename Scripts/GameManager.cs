@@ -48,6 +48,9 @@ public class GameManager : MonoBehaviour
         // Initialize all managers in the correct order
         LogManager.LogMessage("Starting manager initialization...");
         
+        // Create GameState early during initialization
+        CreateGameState();
+        
         // First initialize network and player managers
         NetworkManager.Initialize();
         PlayerManager.Initialize();
@@ -66,6 +69,18 @@ public class GameManager : MonoBehaviour
         LogManager.LogMessage("All managers initialized successfully");
     }
     
+    private void CreateGameState()
+    {
+        // Create GameState object
+        GameObject gameStateObj = new GameObject("GameState");
+        DontDestroyOnLoad(gameStateObj);
+        
+        // Add required components
+        GameState gameState = gameStateObj.AddComponent<GameState>();
+        
+        LogManager.LogMessage("GameState created during initialization");
+    }
+    
     // Handle game state transitions
     public void StartGame()
     {
@@ -76,6 +91,9 @@ public class GameManager : MonoBehaviour
         
         // Set game started flag
         _gameStarted = true;
+        
+        // Network the GameState that was created during initialization
+        GameState.Instance.NetworkGameState();
         
         // Initialize game systems through the GameInitializer
         GameInitializer.InitializeGame();

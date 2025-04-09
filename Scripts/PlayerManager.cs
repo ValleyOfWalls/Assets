@@ -93,6 +93,9 @@ public class PlayerManager : MonoBehaviour
                     GameManager.Instance.LogManager.LogMessage($"Directly registering player {playerName} with lobby manager");
                 }
                 
+                // Spawn the player state for this player
+                SpawnPlayerState(runner, player, playerObject);
+                
                 // Create camera for the local player
                 GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
                 GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
@@ -108,6 +111,53 @@ public class PlayerManager : MonoBehaviour
         catch (Exception ex) 
         {
             GameManager.Instance.LogManager.LogError($"Error in OnLocalPlayerJoined: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+    
+    // New method to spawn player state
+    private void SpawnPlayerState(NetworkRunner runner, PlayerRef playerRef, NetworkObject playerObject)
+    {
+        try
+        {
+            // Load the PlayerState prefab
+            NetworkObject playerStatePrefab = Resources.Load<NetworkObject>("PlayerStatePrefab");
+            
+            if (playerStatePrefab == null)
+            {
+                GameManager.Instance.LogManager.LogError("PlayerStatePrefab not found! Please create it and place it in a Resources folder.");
+                return;
+            }
+            
+            // Spawn the PlayerState for this player
+            NetworkObject stateObj = runner.Spawn(playerStatePrefab, inputAuthority: playerRef);
+            
+            if (stateObj != null)
+            {
+                // Get the PlayerState component
+                PlayerState playerState = stateObj.GetComponent<PlayerState>();
+                
+                if (playerState != null)
+                {
+                    // Link player component and player state
+                    Player playerComponent = playerObject.GetComponent<Player>();
+                    if (playerComponent != null)
+                    {
+                        GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for player {playerRef.PlayerId}");
+                    }
+                }
+                else
+                {
+                    GameManager.Instance.LogManager.LogError("PlayerState component not found on spawned object!");
+                }
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogError("Failed to spawn PlayerState object!");
+            }
+        }
+        catch (Exception ex)
+        {
+            GameManager.Instance.LogManager.LogError($"Error spawning PlayerState: {ex.Message}\n{ex.StackTrace}");
         }
     }
     
