@@ -47,6 +47,21 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     {
         _canvas = canvas;
         
+        // Ensure we have the required components
+        _rectTransform = GetComponent<RectTransform>();
+        if (_rectTransform == null)
+        {
+            Debug.LogError($"Card {gameObject.name} missing RectTransform component");
+            _rectTransform = gameObject.AddComponent<RectTransform>();
+        }
+        
+        _canvasGroup = GetComponent<CanvasGroup>();
+        if (_canvasGroup == null)
+        {
+            Debug.LogError($"Card {gameObject.name} missing CanvasGroup component");
+            _canvasGroup = gameObject.AddComponent<CanvasGroup>();
+        }
+        
         // Only mark as drag-ready if we have all the necessary components
         _isDragReady = (_canvas != null && _rectTransform != null && _canvasGroup != null);
         
@@ -123,6 +138,34 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
                     break;
             }
         }
+        
+        // UPDATED: Add visual cue for targeting type
+        if (_descriptionText != null)
+        {
+            // Add target info to description
+            string targetInfo = "";
+            switch (_cardData.Target)
+            {
+                case CardTarget.Self:
+                    targetInfo = "[Targets: Your Monster]";
+                    break;
+                case CardTarget.Enemy:
+                    targetInfo = "[Targets: Enemy Monster]";
+                    break;
+                case CardTarget.AllEnemies:
+                    targetInfo = "[Targets: All Enemies]";
+                    break;
+                case CardTarget.All:
+                    targetInfo = "[Targets: All]";
+                    break;
+            }
+            
+            // Add target info below the regular description
+            if (!string.IsNullOrEmpty(targetInfo))
+            {
+                _descriptionText.text = $"{_cardData.Description}\n\n<color=#aaaaaa><size=10>{targetInfo}</size></color>";
+            }
+        }
     }
     
     private void OnButtonClicked()
@@ -149,13 +192,28 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
         // First, verify drag operation is properly initialized
         if (!_isDragReady)
         {
-            Debug.LogWarning($"Attempted to drag card {gameObject.name} but drag operation not initialized");
+            Debug.LogWarning($"Attempted to drag card {gameObject.name} but drag operation not initialized. Canvas: {(_canvas != null ? _canvas.name : "null")}");
             eventData.pointerDrag = null;  // Cancel the drag
             return;
         }
         
         if (!CanBePlayed())
         {
+            // Log why the card can't be played
+            if (GameState.Instance == null)
+                Debug.LogWarning("Cannot play card: GameState is null");
+            else if (!GameState.Instance.IsLocalPlayerTurn())
+                Debug.LogWarning("Cannot play card: Not your turn");
+            else if (_cardData == null)
+                Debug.LogWarning("Cannot play card: Card data is null");
+            else {
+                PlayerState localPlayerState = GameState.Instance.GetLocalPlayerState();
+                if (localPlayerState == null)
+                    Debug.LogWarning("Cannot play card: Local player state is null");
+                else
+                    Debug.LogWarning($"Cannot play card: Not enough energy ({localPlayerState.Energy} < {_cardData.EnergyCost})");
+            }
+            
             // Can't play the card - abort drag
             eventData.pointerDrag = null;
             return;
@@ -196,6 +254,50 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             // Move the card
             transform.position = _canvas.transform.TransformPoint(localPosition);
         }
+        
+        // UPDATED: Check for valid targets as we drag
+        CheckForTargetsUnderPointer(eventData);
+    }
+    
+    // NEW: Check for valid targets under the pointer
+    private void CheckForTargetsUnderPointer(PointerEventData eventData)
+    {
+        // Raycast to find potential targets
+        List<RaycastResult> results = new List<RaycastResult>();
+        EventSystem.current.RaycastAll(eventData, results);
+        
+        // Reset all monster highlights first
+        ResetAllMonsterHighlights();
+        
+        // Check each result for valid targets
+        foreach (RaycastResult result in results)
+        {
+            // Skip the card itself
+            if (result.gameObject == gameObject)
+                continue;
+                
+            // Check for monster targets
+            MonsterDisplay monsterDisplay = result.gameObject.GetComponent<MonsterDisplay>();
+            if (monsterDisplay != null)
+            {
+                // Highlight if it's a valid target
+                if (IsValidMonsterTarget(monsterDisplay))
+                {
+                    monsterDisplay.ShowHighlight(true);
+                }
+            }
+        }
+    }
+    
+    // NEW: Reset all highlights
+    private void ResetAllMonsterHighlights()
+    {
+        // Find all monster displays and reset their highlights
+        MonsterDisplay[] allDisplays = FindObjectsOfType<MonsterDisplay>();
+        foreach (var display in allDisplays)
+        {
+            display.ShowHighlight(false);
+        }
     }
     
     public void OnEndDrag(PointerEventData eventData)
@@ -215,6 +317,9 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
         
         // Check if the card was dropped on a valid target
         GameObject target = FindDropTarget(eventData.position);
+        
+        // Reset all highlights
+        ResetAllMonsterHighlights();
         
         if (target != null)
         {
@@ -242,6 +347,16 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
         List<RaycastResult> results = new List<RaycastResult>();
         EventSystem.current.RaycastAll(eventData, results);
         
+        // Debug the raycast results
+        if (results.Count > 0) {
+            Debug.Log($"Raycast hit {results.Count} objects:");
+            foreach (var result in results) {
+                Debug.Log($"- {result.gameObject.name} ({result.gameObject.GetType()})");
+            }
+        } else {
+            Debug.Log("Raycast hit no objects");
+        }
+        
         // Check each result for valid targets
         foreach (RaycastResult result in results)
         {
@@ -256,34 +371,39 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
                 // Check if the card can target this monster based on its target type
                 if (IsValidMonsterTarget(monsterDisplay))
                 {
+                    Debug.Log($"Found valid monster target: {result.gameObject.name}");
                     return result.gameObject;
                 }
+                else
+                {
+                    Debug.Log($"Found invalid monster target: {result.gameObject.name}");
+                }
             }
-            
-            // Add other target types as needed (player, etc.)
         }
         
+        Debug.Log("No valid target found");
         return null;
     }
     
+    // UPDATED: Check if monster is a valid target based on player/opponent status
     private bool IsValidMonsterTarget(MonsterDisplay monsterDisplay)
     {
         if (_cardData == null) return false;
         
-        // Get the target's parent object to determine if it's player or opponent monster
-        bool isOpponentMonster = monsterDisplay.gameObject.name.Contains("Opponent");
+        // Check if it's the player's monster or opponent's monster
+        bool isPlayerMonster = monsterDisplay.IsPlayerMonster();
         
         switch (_cardData.Target)
         {
             case CardTarget.Enemy:
             case CardTarget.AllEnemies:
-                return isOpponentMonster;
+                return !isPlayerMonster; // Target opponent's monster
                 
             case CardTarget.Self:
-                return !isOpponentMonster;
+                return isPlayerMonster; // Target player's monster
                 
             case CardTarget.All:
-                return true;
+                return true; // Can target either
                 
             default:
                 return false;
@@ -292,17 +412,33 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     
     private bool CanBePlayed()
     {
-        if (GameState.Instance == null || !GameState.Instance.IsLocalPlayerTurn())
+        if (GameState.Instance == null) {
+            Debug.LogWarning("GameState.Instance is null");
             return false;
-            
-        if (_cardData == null)
+        }
+        
+        if (!GameState.Instance.IsLocalPlayerTurn()) {
+            Debug.LogWarning("Not local player's turn");
             return false;
-            
+        }
+        
+        if (_cardData == null) {
+            Debug.LogWarning("Card data is null");
+            return false;
+        }
+        
         PlayerState localPlayerState = GameState.Instance.GetLocalPlayerState();
-        if (localPlayerState == null)
+        if (localPlayerState == null) {
+            Debug.LogWarning("Local player state is null");
             return false;
-            
+        }
+        
         // Check if player has enough energy
-        return localPlayerState.Energy >= _cardData.EnergyCost;
+        bool hasEnoughEnergy = localPlayerState.Energy >= _cardData.EnergyCost;
+        if (!hasEnoughEnergy) {
+            Debug.LogWarning($"Not enough energy: {localPlayerState.Energy} < {_cardData.EnergyCost}");
+        }
+        
+        return hasEnoughEnergy;
     }
 }

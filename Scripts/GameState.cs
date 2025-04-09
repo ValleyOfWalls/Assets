@@ -16,13 +16,25 @@ public class GameState : NetworkBehaviour
     [Networked] public NetworkBool DraftPhaseActive { get; set; }
     [Networked] public NetworkBool GameActive { get; set; }
     [Networked] public NetworkBool RoundComplete { get; set; }
-    [Networked] public int CurrentTurnPlayerIndex { get; set; }
+    
+    // REMOVED: Global turn index
+    // [Networked] public int CurrentTurnPlayerIndex { get; set; }
+    
     [Networked] public int RoundsToWin { get; set; }
+
+    // NEW: Dictionary to track active turns per player
+    // We can't directly network a dictionary, so we'll use RPCs to sync this
+    private Dictionary<PlayerRef, bool> _isPlayerTurn = new Dictionary<PlayerRef, bool>();
+    private Dictionary<PlayerRef, bool> _isMonsterTurn = new Dictionary<PlayerRef, bool>();
+    
+    // CURRENT ROUND PROGRESS
+    // Track how many players have completed their turns in this round
+    private int _playersCompletedThisRound = 0;
 
     // Events
     public static event Action<int> OnRoundChanged;
     public static event Action<bool> OnDraftPhaseChanged;
-    public static event Action<int> OnTurnChanged;
+    public static event Action<PlayerRef, bool> OnPlayerTurnChanged; // MODIFIED: Changed parameter
     public static event Action<bool> OnGameActiveChanged;
     public static event Action OnRoundComplete;
     public static event Action OnGameComplete;
@@ -31,12 +43,9 @@ public class GameState : NetworkBehaviour
     public static event Action<PlayerRef, PlayerState> OnPlayerStateAdded;
     public static event Action<PlayerRef, PlayerState> OnPlayerStateRemoved;
 
-    // Track previous values for change detection
-    private int _previousTurnPlayerIndex;
-
     // Player references
     private Dictionary<PlayerRef, PlayerState> _playerStates = new Dictionary<PlayerRef, PlayerState>();
-    private List<PlayerRef> _turnOrder = new List<PlayerRef>();
+    private List<PlayerRef> _allPlayers = new List<PlayerRef>();
 
     // Card collections
     private List<CardData> _draftPool = new List<CardData>();
@@ -73,26 +82,12 @@ public class GameState : NetworkBehaviour
             GameActive = false;
             DraftPhaseActive = false;
             RoundComplete = false;
-            CurrentTurnPlayerIndex = 0;
+            
+            // We no longer use global turn index
+            // CurrentTurnPlayerIndex = 0;
             
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage("GameState initialized with default values");
-        }
-        
-        // Initialize tracking variables
-        _previousTurnPlayerIndex = CurrentTurnPlayerIndex;
-    }
-
-    // Manual change detection in Render
-    public override void Render()
-    {
-        base.Render();
-        
-        // Check for changes in turn player
-        if (_isSpawned && _previousTurnPlayerIndex != CurrentTurnPlayerIndex)
-        {
-            OnTurnChanged?.Invoke(CurrentTurnPlayerIndex);
-            _previousTurnPlayerIndex = CurrentTurnPlayerIndex;
         }
     }
 
@@ -102,9 +97,16 @@ public class GameState : NetworkBehaviour
         {
             _playerStates.Add(player, state);
             
-            if (_isSpawned && HasStateAuthority && !_turnOrder.Contains(player))
+            if (_isSpawned && HasStateAuthority && !_allPlayers.Contains(player))
             {
-                _turnOrder.Add(player);
+                _allPlayers.Add(player);
+                
+                // Initialize turn state for this player - start with player's turn
+                _isPlayerTurn[player] = true;
+                _isMonsterTurn[player] = false;
+                
+                // Notify the player that their turn has started
+                RPC_NotifyPlayerTurnState(player, true);
             }
             
             if (GameManager.Instance != null)
@@ -125,7 +127,9 @@ public class GameState : NetworkBehaviour
             
             // Remove from collections
             _playerStates.Remove(player);
-            _turnOrder.Remove(player);
+            _allPlayers.Remove(player);
+            _isPlayerTurn.Remove(player);
+            _isMonsterTurn.Remove(player);
             
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage($"Player {player} unregistered from GameState");
@@ -138,6 +142,7 @@ public class GameState : NetworkBehaviour
         {
             GameActive = true;
             CurrentRound = 1;
+            _playersCompletedThisRound = 0;
             
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage("Game starting on network!");
@@ -166,15 +171,39 @@ public class GameState : NetworkBehaviour
         // Use RPC to ensure all players draw cards
         RPC_DrawInitialCardsForAllPlayers();
         
-        // Start first turn
-        CurrentTurnPlayerIndex = 0;
-        OnTurnChanged?.Invoke(CurrentTurnPlayerIndex);
+        // Start every player's turn (no need for turns in sequence)
+        if (HasStateAuthority)
+        {
+            foreach (var player in _allPlayers)
+            {
+                // Set this player's turn to active
+                _isPlayerTurn[player] = true;
+                _isMonsterTurn[player] = false;
+                
+                // Notify the player that it's their turn
+                RPC_NotifyPlayerTurnState(player, true);
+            }
+        }
         
         // Notify about game active state change
         OnGameActiveChanged?.Invoke(true);
     }
     
-    // NEW RPC: Ensure all players draw cards
+    // NEW RPC: Notify player about their turn state
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyPlayerTurnState(PlayerRef player, bool isPlayerTurn)
+    {
+        // Update local dictionaries
+        _isPlayerTurn[player] = isPlayerTurn;
+        _isMonsterTurn[player] = !isPlayerTurn;
+        
+        // Notify UI through event
+        OnPlayerTurnChanged?.Invoke(player, isPlayerTurn);
+        
+        GameManager.Instance.LogManager.LogMessage($"Turn changed for player {player}: {(isPlayerTurn ? "Player's Turn" : "Monster's Turn")}");
+    }
+    
+    // RPC: Ensure all players draw cards
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_DrawInitialCardsForAllPlayers()
     {
@@ -191,7 +220,7 @@ public class GameState : NetworkBehaviour
         StartCoroutine(DelayedForceCardDraw());
     }
     
-    // NEW METHOD: Delayed force card draw to ensure all players get cards
+    // METHOD: Delayed force card draw to ensure all players get cards
     private IEnumerator DelayedForceCardDraw()
     {
         // Wait a short time to allow normal draws to complete
@@ -220,7 +249,7 @@ public class GameState : NetworkBehaviour
             {
                 // Just match the player against their own monster for now
                 // In the future, you could create an AI player
-                PlayerRef playerRef = _turnOrder[0];
+                PlayerRef playerRef = _allPlayers[0];
                 RPC_SetMonsterMatchup(playerRef, playerRef);
                 GameManager.Instance.LogManager.LogMessage($"Single player mode: Player {playerRef} vs own monster");
                 return;
@@ -264,48 +293,85 @@ public class GameState : NetworkBehaviour
         }
     }
 
-    private void DealInitialCards()
+    // MODIFIED: NextTurn now handles player-monster-player sequence for a specific player
+    public void NextTurn(PlayerRef player)
     {
-        foreach (var playerEntry in _playerStates)
+        if (!_isSpawned || !HasStateAuthority || !GameActive)
+            return;
+        
+        // If it's currently the player's turn, switch to monster's turn
+        if (_isPlayerTurn.ContainsKey(player) && _isPlayerTurn[player])
         {
-            // Deal initial cards to each player
-            playerEntry.Value.DrawInitialHand();
-            GameManager.Instance.LogManager.LogMessage($"Dealing initial cards to {playerEntry.Value.PlayerName}");
+            _isPlayerTurn[player] = false;
+            _isMonsterTurn[player] = true;
+            
+            // Notify player it's now the monster's turn
+            RPC_NotifyPlayerTurnState(player, false);
+            
+            // Simulate monster's turn after a short delay
+            StartCoroutine(SimulateMonsterTurn(player));
+            
+            GameManager.Instance.LogManager.LogMessage($"Player {player}'s turn ended, monster's turn started");
+        }
+        // If it's the monster's turn ending (or if we're just cycling turns)
+        else
+        {
+            // Check if player has completed a full player-monster cycle
+            bool wasMonsterTurn = _isMonsterTurn.ContainsKey(player) && _isMonsterTurn[player];
+            
+            // Set back to player's turn
+            _isPlayerTurn[player] = true;
+            _isMonsterTurn[player] = false;
+            
+            // Notify player it's their turn again
+            RPC_NotifyPlayerTurnState(player, true);
+            
+            GameManager.Instance.LogManager.LogMessage($"Monster's turn for player {player} ended, player's turn started");
+            
+            // If we completed a full player-monster cycle, count it towards round completion
+            if (wasMonsterTurn)
+            {
+                _playersCompletedThisRound++;
+                GameManager.Instance.LogManager.LogMessage($"{_playersCompletedThisRound} players have completed their turns this round");
+                
+                // If all players have completed a turn, check for round completion
+                if (_playersCompletedThisRound >= _allPlayers.Count)
+                {
+                    // All players have finished their turns
+                    RoundComplete = true;
+                    RPC_TriggerRoundComplete();
+                    
+                    // Check if game should end
+                    CheckGameEnd();
+                    
+                    if (!GameActive)
+                    {
+                        return;
+                    }
+                    
+                    // Start draft phase
+                    DraftPhaseActive = true;
+                    OnDraftPhaseChanged?.Invoke(true);
+                    GenerateDraftOptions();
+                    
+                    // Reset counter
+                    _playersCompletedThisRound = 0;
+                }
+            }
         }
     }
-
-    public void NextTurn()
+    
+    // NEW: Simulate monster's turn (currently just passes turn back to player)
+    private IEnumerator SimulateMonsterTurn(PlayerRef player)
     {
-        if (_isSpawned && HasStateAuthority)
-        {
-            // Check if all players have taken their turn
-            int nextIndex = (CurrentTurnPlayerIndex + 1) % _turnOrder.Count;
-            
-            if (nextIndex == 0)
-            {
-                // All players have taken their turn
-                RoundComplete = true;
-                RPC_TriggerRoundComplete();
-                
-                // Check if game should end
-                CheckGameEnd();
-                
-                if (!GameActive)
-                {
-                    return;
-                }
-                
-                // Start draft phase
-                DraftPhaseActive = true;
-                OnDraftPhaseChanged?.Invoke(true);
-                GenerateDraftOptions();
-            }
-            else
-            {
-                // Move to next player's turn
-                CurrentTurnPlayerIndex = nextIndex;
-            }
-        }
+        // Wait a short time to simulate monster thinking
+        yield return new WaitForSeconds(1.0f);
+        
+        // For now, just immediately end the monster's turn
+        // In the future, implement monster AI actions here
+        
+        // End monster's turn, go back to player
+        NextTurn(player);
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
@@ -356,7 +422,7 @@ public class GameState : NetworkBehaviour
         {
             CurrentRound++;
             RoundComplete = false;
-            CurrentTurnPlayerIndex = 0;
+            _playersCompletedThisRound = 0;
             
             // Notify clients
             RPC_RoundChanged(CurrentRound);
@@ -369,6 +435,17 @@ public class GameState : NetworkBehaviour
             
             // Assign new monster matchups
             AssignMonsterMatchups();
+            
+            // Start every player's turn for the new round
+            foreach (var player in _allPlayers)
+            {
+                // Set this player's turn to active
+                _isPlayerTurn[player] = true;
+                _isMonsterTurn[player] = false;
+                
+                // Notify the player that it's their turn
+                RPC_NotifyPlayerTurnState(player, true);
+            }
         }
     }
 
@@ -416,21 +493,25 @@ public class GameState : NetworkBehaviour
         return networkRunner?.LocalPlayer ?? default;
     }
 
+    // MODIFIED: Check if it's the local player's turn based on player-specific turn state
     public bool IsLocalPlayerTurn()
     {
-        if (!_isSpawned || _turnOrder.Count == 0) return false;
+        if (!_isSpawned) return false;
         
         var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
         if (networkRunner == null) return false;
         
         PlayerRef localPlayer = networkRunner.LocalPlayer;
         
-        if (CurrentTurnPlayerIndex >= 0 && CurrentTurnPlayerIndex < _turnOrder.Count)
+        // Check if it's this player's turn in our dictionary
+        if (_isPlayerTurn.TryGetValue(localPlayer, out bool isPlayerTurn))
         {
-            return _turnOrder[CurrentTurnPlayerIndex] == localPlayer;
+            return isPlayerTurn;
         }
         
-        return false;
+        // Default to allowing the turn if we're not sure
+        // This helps during initialization and prevents blocks
+        return true;
     }
 
     // Safe accessors for networked properties
@@ -449,9 +530,14 @@ public class GameState : NetworkBehaviour
         return _isSpawned && GameActive;
     }
 
-    public int GetCurrentTurnPlayerIndex()
+    // MODIFIED: Get turn state for a specific player
+    public bool IsPlayerTurn(PlayerRef player)
     {
-        return _isSpawned ? CurrentTurnPlayerIndex : 0;
+        if (_isPlayerTurn.TryGetValue(player, out bool isPlayerTurn))
+        {
+            return isPlayerTurn;
+        }
+        return false;
     }
 
     public bool IsSpawned()

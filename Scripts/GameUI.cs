@@ -16,7 +16,8 @@ public class GameUI : MonoBehaviour
     private GameObject _handPanel;
     private GameObject _statsPanel;
     private GameObject _opponentsPanel;
-    private GameObject _monsterPanel;
+    private GameObject _battlePanel; // Renamed from monsterPanel to battlePanel
+    private GameObject _playerMonsterPanel; // Separate panel for player's own monster
     private GameObject _turnInfoPanel;
     
     // Card references
@@ -24,8 +25,8 @@ public class GameUI : MonoBehaviour
     private List<CardDisplay> _cardDisplays = new List<CardDisplay>();
     
     // Monster displays
-    private MonsterDisplay _playerMonsterDisplay;
-    private MonsterDisplay _opponentMonsterDisplay;
+    private MonsterDisplay _playerMonsterDisplay; // Now in separate panel
+    private MonsterDisplay _opponentMonsterDisplay; // Main battle target
     
     // Stats Text Elements
     private TMP_Text _healthText;
@@ -95,7 +96,8 @@ public class GameUI : MonoBehaviour
             CreateCardPrefab();
             CreatePlayerUI();
             CreateOpponentsUI();
-            CreateMonsterUI();
+            CreateBattleUI(); // Renamed from CreateMonsterUI
+            CreatePlayerMonsterUI(); // Create UI for player's own monster
             CreateTurnInfoUI();
             CreateHandUI();
             
@@ -103,7 +105,7 @@ public class GameUI : MonoBehaviour
             PlayerState.OnStatsChanged += UpdatePlayerStats;
             PlayerState.OnHandChanged += UpdateHand;
             GameState.OnRoundChanged += UpdateRoundInfo;
-            GameState.OnTurnChanged += UpdateTurnInfo;
+            GameState.OnPlayerTurnChanged += HandlePlayerTurnChanged; // FIXED: Updated to new event
             
             // Subscribe to GameState player registration events
             GameState.OnPlayerStateAdded += SubscribeToOpponentState;
@@ -116,11 +118,14 @@ public class GameUI : MonoBehaviour
             // Hide lobby UI
             HideLobbyUI();
             
-            // Initial UI update
-            UpdateAllUI();
-            
             // Do an immediate attempt to find and subscribe to all opponent states
             InitializeOpponentStates();
+            
+            // Wait a bit before the initial UI update to allow for network sync
+            yield return new WaitForSeconds(0.5f);
+            
+            // Initial UI update
+            UpdateAllUI();
             
             yield break; // Successful initialization, exit coroutine
         }
@@ -234,30 +239,29 @@ public class GameUI : MonoBehaviour
         }
     }
 
-private void CreateMainCanvas()
-{
-    // Create main canvas for game UI
-    GameObject canvasObj = new GameObject("GameCanvas");
-    _gameCanvas = canvasObj.AddComponent<Canvas>();
-    _gameCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-    _gameCanvas.sortingOrder = 10; // Ensure it's above other UI
-    
-    CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
-    scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-    scaler.referenceResolution = new Vector2(1920, 1080);
-    scaler.matchWidthOrHeight = 0.5f; // Balance width and height
-    
-    // Make sure the GraphicRaycaster is added - essential for drag operations!
-    GraphicRaycaster raycaster = canvasObj.AddComponent<GraphicRaycaster>();
-    
-    DontDestroyOnLoad(canvasObj);
-    
-    // Add a debug log to verify canvas creation
-    Debug.Log($"Game canvas created: {_gameCanvas.name}");
-    
-    GameManager.Instance.LogManager.LogMessage("Game canvas created");
-}
-
+    private void CreateMainCanvas()
+    {
+        // Create main canvas for game UI
+        GameObject canvasObj = new GameObject("GameCanvas");
+        _gameCanvas = canvasObj.AddComponent<Canvas>();
+        _gameCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        _gameCanvas.sortingOrder = 10; // Ensure it's above other UI
+        
+        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920, 1080);
+        scaler.matchWidthOrHeight = 0.5f; // Balance width and height
+        
+        // Make sure the GraphicRaycaster is added - essential for drag operations!
+        GraphicRaycaster raycaster = canvasObj.AddComponent<GraphicRaycaster>();
+        
+        DontDestroyOnLoad(canvasObj);
+        
+        // Add a debug log to verify canvas creation
+        Debug.Log($"Game canvas created: {_gameCanvas.name}");
+        
+        GameManager.Instance.LogManager.LogMessage("Game canvas created");
+    }
 
     private void CreateMainLayout()
     {
@@ -280,129 +284,151 @@ private void CreateMainCanvas()
     }
     
     private void CreateCardPrefab()
-{
-    // Create card prefab for hand display
-    _cardPrefab = new GameObject("CardPrefab");
-    _cardPrefab.SetActive(false);
-    
-    // Add RectTransform - essential for UI elements
-    RectTransform cardRect = _cardPrefab.AddComponent<RectTransform>();
-    cardRect.sizeDelta = new Vector2(180, 250);
-    
-    // Card background
-    Image cardBg = _cardPrefab.AddComponent<Image>();
-    cardBg.color = new Color(0.2f, 0.2f, 0.2f);
-    
-    // Add CardDisplay component
-    CardDisplay display = _cardPrefab.AddComponent<CardDisplay>();
-    
-    // Add CanvasGroup - required for drag operations
-    CanvasGroup canvasGroup = _cardPrefab.AddComponent<CanvasGroup>();
-    
-    // Create title text
-    GameObject titleObj = new GameObject("TitleText");
-    titleObj.transform.SetParent(_cardPrefab.transform, false);
-    TMP_Text titleText = titleObj.AddComponent<TextMeshProUGUI>();
-    titleText.fontSize = 16;
-    titleText.alignment = TextAlignmentOptions.Center;
-    titleText.color = Color.white;
-    
-    RectTransform titleRect = titleObj.GetComponent<RectTransform>();
-    titleRect.anchorMin = new Vector2(0, 0.85f);
-    titleRect.anchorMax = new Vector2(1, 1);
-    titleRect.offsetMin = Vector2.zero;
-    titleRect.offsetMax = Vector2.zero;
-    
-    // Create cost text
-    GameObject costObj = new GameObject("CostText");
-    costObj.transform.SetParent(_cardPrefab.transform, false);
-    TMP_Text costText = costObj.AddComponent<TextMeshProUGUI>();
-    costText.fontSize = 20;
-    costText.alignment = TextAlignmentOptions.Center;
-    costText.color = Color.yellow;
-    
-    // Add background circle for cost
-    GameObject costBgObj = new GameObject("CostBg");
-    costBgObj.transform.SetParent(costObj.transform, false);
-    costBgObj.transform.SetSiblingIndex(0);
-    Image costBg = costBgObj.AddComponent<Image>();
-    costBg.color = new Color(0.1f, 0.1f, 0.3f);
-    
-    RectTransform costBgRect = costBgObj.GetComponent<RectTransform>();
-    costBgRect.anchorMin = Vector2.zero;
-    costBgRect.anchorMax = Vector2.one;
-    costBgRect.offsetMin = new Vector2(-5, -5);
-    costBgRect.offsetMax = new Vector2(5, 5);
-    
-    RectTransform costRect = costObj.GetComponent<RectTransform>();
-    costRect.anchorMin = new Vector2(0, 0.9f);
-    costRect.anchorMax = new Vector2(0.2f, 1);
-    costRect.offsetMin = Vector2.zero;
-    costRect.offsetMax = Vector2.zero;
-    
-    // Create description text
-    GameObject descObj = new GameObject("DescriptionText");
-    descObj.transform.SetParent(_cardPrefab.transform, false);
-    TMP_Text descText = descObj.AddComponent<TextMeshProUGUI>();
-    descText.fontSize = 14;
-    descText.alignment = TextAlignmentOptions.Center;
-    descText.color = Color.white;
-    
-    RectTransform descRect = descObj.GetComponent<RectTransform>();
-    descRect.anchorMin = new Vector2(0.1f, 0.2f);
-    descRect.anchorMax = new Vector2(0.9f, 0.6f);
-    descRect.offsetMin = Vector2.zero;
-    descRect.offsetMax = Vector2.zero;
-    
-    // Set references in CardDisplay
-    display.SetTextElements(titleText, costText, descText);
-    
-    // Add button for interactivity
-    Button cardButton = _cardPrefab.AddComponent<Button>();
-    ColorBlock colors = cardButton.colors;
-    colors.highlightedColor = new Color(0.8f, 0.8f, 1f);
-    colors.pressedColor = new Color(0.7f, 0.7f, 0.9f);
-    cardButton.colors = colors;
-    
-    // Set up the button click handler
-    display.SetButton(cardButton);
-    
-    GameManager.Instance.LogManager.LogMessage("Card prefab created");
-}
-
-    
-    // New method to set up drag-and-drop on card prefab
-    // This is a partial update with just the method that needs fixing in GameUI.cs
-
-// Replace the old SetupCardDragAndDrop method with this one
-private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
-{
-    // Use the new method name: InitializeDragOperation instead of SetCanvas
-    if (_gameCanvas != null)
     {
-        display.InitializeDragOperation(_gameCanvas);
-        Debug.Log($"Drag operation initialized for card {cardObj.name}");
-    }
-    else
-    {
-        Debug.LogError("Game canvas is null when setting up card drag!");
+        // Create card prefab for hand display
+        _cardPrefab = new GameObject("CardPrefab");
+        _cardPrefab.SetActive(false);
         
-        // Try to find the canvas as a fallback
-        Canvas foundCanvas = FindObjectOfType<Canvas>();
-        if (foundCanvas != null)
+        // Add RectTransform - essential for UI elements
+        RectTransform cardRect = _cardPrefab.AddComponent<RectTransform>();
+        cardRect.sizeDelta = new Vector2(180, 250);
+        
+        // Card background
+        Image cardBg = _cardPrefab.AddComponent<Image>();
+        cardBg.color = new Color(0.2f, 0.2f, 0.2f);
+        
+        // Add CardDisplay component
+        CardDisplay display = _cardPrefab.AddComponent<CardDisplay>();
+        
+        // Add CanvasGroup - required for drag operations
+        CanvasGroup canvasGroup = _cardPrefab.AddComponent<CanvasGroup>();
+        
+        // Create title text
+        GameObject titleObj = new GameObject("TitleText");
+        titleObj.transform.SetParent(_cardPrefab.transform, false);
+        TMP_Text titleText = titleObj.AddComponent<TextMeshProUGUI>();
+        titleText.fontSize = 16;
+        titleText.alignment = TextAlignmentOptions.Center;
+        titleText.color = Color.white;
+        
+        RectTransform titleRect = titleObj.GetComponent<RectTransform>();
+        titleRect.anchorMin = new Vector2(0, 0.85f);
+        titleRect.anchorMax = new Vector2(1, 1);
+        titleRect.offsetMin = Vector2.zero;
+        titleRect.offsetMax = Vector2.zero;
+        
+        // Create cost text
+        GameObject costObj = new GameObject("CostText");
+        costObj.transform.SetParent(_cardPrefab.transform, false);
+        TMP_Text costText = costObj.AddComponent<TextMeshProUGUI>();
+        costText.fontSize = 20;
+        costText.alignment = TextAlignmentOptions.Center;
+        costText.color = Color.yellow;
+        
+        // Add background circle for cost
+        GameObject costBgObj = new GameObject("CostBg");
+        costBgObj.transform.SetParent(costObj.transform, false);
+        costBgObj.transform.SetSiblingIndex(0);
+        Image costBg = costBgObj.AddComponent<Image>();
+        costBg.color = new Color(0.1f, 0.1f, 0.3f);
+        
+        RectTransform costBgRect = costBgObj.GetComponent<RectTransform>();
+        costBgRect.anchorMin = Vector2.zero;
+        costBgRect.anchorMax = Vector2.one;
+        costBgRect.offsetMin = new Vector2(-5, -5);
+        costBgRect.offsetMax = new Vector2(5, 5);
+        
+        RectTransform costRect = costObj.GetComponent<RectTransform>();
+        costRect.anchorMin = new Vector2(0, 0.9f);
+        costRect.anchorMax = new Vector2(0.2f, 1);
+        costRect.offsetMin = Vector2.zero;
+        costRect.offsetMax = Vector2.zero;
+        
+        // Create description text
+        GameObject descObj = new GameObject("DescriptionText");
+        descObj.transform.SetParent(_cardPrefab.transform, false);
+        TMP_Text descText = descObj.AddComponent<TextMeshProUGUI>();
+        descText.fontSize = 14;
+        descText.alignment = TextAlignmentOptions.Center;
+        descText.color = Color.white;
+        
+        RectTransform descRect = descObj.GetComponent<RectTransform>();
+        descRect.anchorMin = new Vector2(0.1f, 0.2f);
+        descRect.anchorMax = new Vector2(0.9f, 0.6f);
+        descRect.offsetMin = Vector2.zero;
+        descRect.offsetMax = Vector2.zero;
+        
+        // Set references in CardDisplay
+        display.SetTextElements(titleText, costText, descText);
+        
+        // Add button for interactivity
+        Button cardButton = _cardPrefab.AddComponent<Button>();
+        ColorBlock colors = cardButton.colors;
+        colors.highlightedColor = new Color(0.8f, 0.8f, 1f);
+        colors.pressedColor = new Color(0.7f, 0.7f, 0.9f);
+        cardButton.colors = colors;
+        
+        // Set up the button click handler
+        display.SetButton(cardButton);
+        
+        GameManager.Instance.LogManager.LogMessage("Card prefab created");
+    }
+
+    private void InitializeCardDragOperation(CardDisplay display)
+    {
+        if (display == null)
         {
-            display.InitializeDragOperation(foundCanvas);
-            Debug.Log("Using fallback canvas for card drag operations");
+            Debug.LogError("Attempted to initialize null CardDisplay");
+            return;
+        }
+        
+        if (_gameCanvas == null)
+        {
+            Debug.LogError("Game canvas is null when initializing card drag!");
+            // Try to find the canvas
+            _gameCanvas = FindObjectOfType<Canvas>();
+            if (_gameCanvas == null)
+            {
+                Debug.LogError("Could not find any canvas in the scene. Drag operations will fail!");
+                return;
+            }
+        }
+        
+        // Initialize the card drag operation with the proper canvas
+        display.InitializeDragOperation(_gameCanvas);
+        
+        // Debug log
+        Debug.Log($"Card drag initialized with canvas: {_gameCanvas.name}");
+    }
+
+    private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
+    {
+        // Use the new method name: InitializeDragOperation instead of SetCanvas
+        if (_gameCanvas != null)
+        {
+            display.InitializeDragOperation(_gameCanvas);
+            Debug.Log($"Drag operation initialized for card {cardObj.name}");
         }
         else
         {
-            Debug.LogError("No canvas found in the scene. Drag operations will fail!");
+            Debug.LogError("Game canvas is null when setting up card drag!");
+            
+            // Try to find the canvas as a fallback
+            Canvas foundCanvas = FindObjectOfType<Canvas>();
+            if (foundCanvas != null)
+            {
+                display.InitializeDragOperation(foundCanvas);
+                Debug.Log("Using fallback canvas for card drag operations");
+            }
+            else
+            {
+                Debug.LogError("No canvas found in the scene. Drag operations will fail!");
+            }
         }
+        
+        // Subscribe to card played event
+        display.CardPlayed += OnCardPlayedOnTarget;
     }
-    
-    // Subscribe to card played event
-    display.CardPlayed += OnCardPlayedOnTarget;
-}
 
     private void CreatePlayerUI()
     {
@@ -582,37 +608,56 @@ private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
         return opponentObj;
     }
 
-    private void CreateMonsterUI()
+    private void CreateBattleUI()
     {
-        // Create monster area in the center
-        _monsterPanel = new GameObject("MonsterPanel");
-        _monsterPanel.transform.SetParent(_mainLayout.transform, false);
+        // Create battle area in the center
+        _battlePanel = new GameObject("BattlePanel");
+        _battlePanel.transform.SetParent(_mainLayout.transform, false);
         
         // Background
-        Image monsterBg = _monsterPanel.AddComponent<Image>();
-        monsterBg.color = new Color(0.1f, 0.1f, 0.2f, 0.4f); // More transparent
+        Image battleBg = _battlePanel.AddComponent<Image>();
+        battleBg.color = new Color(0.1f, 0.1f, 0.2f, 0.4f); // More transparent
         
         // Position in center
-        RectTransform monsterRect = _monsterPanel.GetComponent<RectTransform>();
-        monsterRect.anchorMin = new Vector2(0.2f, 0.3f);
-        monsterRect.anchorMax = new Vector2(0.8f, 0.8f);
-        monsterRect.offsetMin = Vector2.zero;
-        monsterRect.offsetMax = Vector2.zero;
+        RectTransform battleRect = _battlePanel.GetComponent<RectTransform>();
+        battleRect.anchorMin = new Vector2(0.2f, 0.3f);
+        battleRect.anchorMax = new Vector2(0.8f, 0.8f);
+        battleRect.offsetMin = Vector2.zero;
+        battleRect.offsetMax = Vector2.zero;
         
-        // Create player's monster on left
-        GameObject playerMonsterObj = new GameObject("PlayerMonster");
-        playerMonsterObj.transform.SetParent(_monsterPanel.transform, false);
-        _playerMonsterDisplay = playerMonsterObj.AddComponent<MonsterDisplay>();
+        // Create player avatar on left (simplified representation of player)
+        GameObject playerAvatarObj = new GameObject("PlayerAvatar");
+        playerAvatarObj.transform.SetParent(_battlePanel.transform, false);
         
-        RectTransform playerMonsterRect = playerMonsterObj.GetComponent<RectTransform>();
-        playerMonsterRect.anchorMin = new Vector2(0, 0);
-        playerMonsterRect.anchorMax = new Vector2(0.45f, 1);
-        playerMonsterRect.offsetMin = new Vector2(20, 20);
-        playerMonsterRect.offsetMax = new Vector2(-10, -20);
+        RectTransform playerAvatarRect = playerAvatarObj.AddComponent<RectTransform>();
+        playerAvatarRect.anchorMin = new Vector2(0, 0);
+        playerAvatarRect.anchorMax = new Vector2(0.45f, 1);
+        playerAvatarRect.offsetMin = new Vector2(20, 20);
+        playerAvatarRect.offsetMax = new Vector2(-10, -20);
         
-        // Create opponent's monster on right
+        // Add player avatar image
+        Image playerAvatar = playerAvatarObj.AddComponent<Image>();
+        playerAvatar.color = new Color(0.3f, 0.5f, 0.8f); // Blue for player
+        
+        // Add player avatar label
+        GameObject playerLabelObj = new GameObject("PlayerLabel");
+        playerLabelObj.transform.SetParent(playerAvatarObj.transform, false);
+        TMP_Text playerLabel = playerLabelObj.AddComponent<TextMeshProUGUI>();
+        playerLabel.text = "YOU";
+        playerLabel.fontSize = 28;
+        playerLabel.fontStyle = FontStyles.Bold;
+        playerLabel.alignment = TextAlignmentOptions.Center;
+        playerLabel.color = Color.white;
+        
+        RectTransform playerLabelRect = playerLabelObj.GetComponent<RectTransform>();
+        playerLabelRect.anchorMin = new Vector2(0, 0.7f);
+        playerLabelRect.anchorMax = new Vector2(1, 0.9f);
+        playerLabelRect.offsetMin = Vector2.zero;
+        playerLabelRect.offsetMax = Vector2.zero;
+        
+        // Create opponent's monster on right (main battle target)
         GameObject opponentMonsterObj = new GameObject("OpponentMonster");
-        opponentMonsterObj.transform.SetParent(_monsterPanel.transform, false);
+        opponentMonsterObj.transform.SetParent(_battlePanel.transform, false);
         _opponentMonsterDisplay = opponentMonsterObj.AddComponent<MonsterDisplay>();
         
         RectTransform opponentMonsterRect = opponentMonsterObj.GetComponent<RectTransform>();
@@ -623,7 +668,7 @@ private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
         
         // Create VS text in middle
         GameObject vsObj = new GameObject("VS");
-        vsObj.transform.SetParent(_monsterPanel.transform, false);
+        vsObj.transform.SetParent(_battlePanel.transform, false);
         TMP_Text vsText = vsObj.AddComponent<TextMeshProUGUI>();
         vsText.text = "VS";
         vsText.fontSize = 36;
@@ -637,10 +682,60 @@ private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
         vsRect.offsetMin = Vector2.zero;
         vsRect.offsetMax = Vector2.zero;
         
-        // Initialize the monster displays with default monsters
-        UpdateMonsterDisplays();
+        // Initialize the opponent monster display
+        UpdateOpponentMonsterDisplay();
         
-        GameManager.Instance.LogManager.LogMessage("Monster displays created");
+        GameManager.Instance.LogManager.LogMessage("Battle display created");
+    }
+    
+    private void CreatePlayerMonsterUI()
+    {
+        // Create panel for player's monster
+        _playerMonsterPanel = new GameObject("PlayerMonsterPanel");
+        _playerMonsterPanel.transform.SetParent(_mainLayout.transform, false);
+        
+        // Background
+        Image monsterBg = _playerMonsterPanel.AddComponent<Image>();
+        monsterBg.color = new Color(0.1f, 0.2f, 0.3f, 0.8f); // Different color to distinguish
+        
+        // Position in bottom left corner
+        RectTransform monsterRect = _playerMonsterPanel.GetComponent<RectTransform>();
+        monsterRect.anchorMin = new Vector2(0, 0);
+        monsterRect.anchorMax = new Vector2(0.2f, 0.3f);
+        monsterRect.offsetMin = new Vector2(20, 230); // Above hand panel
+        monsterRect.offsetMax = new Vector2(-20, -10);
+        
+        // Add panel title
+        GameObject titleObj = new GameObject("Title");
+        titleObj.transform.SetParent(_playerMonsterPanel.transform, false);
+        TMP_Text titleText = titleObj.AddComponent<TextMeshProUGUI>();
+        titleText.text = "YOUR MONSTER";
+        titleText.fontSize = 16;
+        titleText.fontStyle = FontStyles.Bold;
+        titleText.alignment = TextAlignmentOptions.Center;
+        titleText.color = Color.white;
+        
+        RectTransform titleRect = titleObj.GetComponent<RectTransform>();
+        titleRect.anchorMin = new Vector2(0, 0.85f);
+        titleRect.anchorMax = new Vector2(1, 1);
+        titleRect.offsetMin = Vector2.zero;
+        titleRect.offsetMax = Vector2.zero;
+        
+        // Create monster display for player's monster
+        GameObject playerMonsterObj = new GameObject("PlayerMonsterDisplay");
+        playerMonsterObj.transform.SetParent(_playerMonsterPanel.transform, false);
+        _playerMonsterDisplay = playerMonsterObj.AddComponent<MonsterDisplay>();
+        
+        RectTransform playerMonsterRect = playerMonsterObj.GetComponent<RectTransform>();
+        playerMonsterRect.anchorMin = new Vector2(0, 0);
+        playerMonsterRect.anchorMax = new Vector2(1, 0.85f);
+        playerMonsterRect.offsetMin = new Vector2(10, 10);
+        playerMonsterRect.offsetMax = new Vector2(-10, -5);
+        
+        // Initialize the player's monster display
+        UpdatePlayerMonsterDisplay();
+        
+        GameManager.Instance.LogManager.LogMessage("Player monster panel created");
     }
 
     private void CreateTurnInfoUI()
@@ -815,18 +910,19 @@ private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
             UpdatePlayerStats(_localPlayerState);
             UpdateHand(_localPlayerState, _localPlayerState?.GetHand() ?? new List<CardData>());
             UpdateOpponentDisplays();
-            UpdateMonsterDisplays();
+            UpdatePlayerMonsterDisplay(); // Update player's monster
+            UpdateOpponentMonsterDisplay(); // Update opponent's monster
             
             if (GameState.Instance != null && GameState.Instance.IsSpawned())
             {
                 UpdateRoundInfo(GameState.Instance.GetCurrentRound());
-                UpdateTurnInfo(GameState.Instance.GetCurrentTurnPlayerIndex());
+                UpdateTurnState(); // FIXED: Use new method for updating turn info
             }
             else
             {
                 // Default values if GameState isn't available
                 UpdateRoundInfo(1);
-                UpdateTurnInfo(0);
+                UpdateTurnState(); // FIXED: Use new method
             }
         }
         catch (Exception ex) {
@@ -868,98 +964,143 @@ private void SetupCardDragAndDrop(CardDisplay display, GameObject cardObj)
     }
 
     private void UpdateHand(PlayerState playerState, List<CardData> hand)
-{
-    if (playerState != _localPlayerState || _handPanel == null) return;
-    
-    // Clear existing cards
-    foreach (var display in _cardDisplays)
     {
-        if (display != null && display.gameObject != null)
+        if (playerState != _localPlayerState || _handPanel == null) return;
+        
+        // Clear existing cards
+        foreach (var display in _cardDisplays)
         {
-            // Unsubscribe from events
-            display.CardClicked -= OnCardClicked;
-            display.CardPlayed -= OnCardPlayedOnTarget;
+            if (display != null && display.gameObject != null)
+            {
+                // Unsubscribe from events
+                display.CardClicked -= OnCardClicked;
+                display.CardPlayed -= OnCardPlayedOnTarget;
+                
+                Destroy(display.gameObject);
+            }
+        }
+        _cardDisplays.Clear();
+        
+        // No cards in hand
+        if (hand == null || hand.Count == 0) return;
+        
+        // Log for debugging
+        Debug.Log($"Creating {hand.Count} cards in hand. Canvas: {(_gameCanvas != null ? _gameCanvas.name : "null")}");
+        
+        // Create card displays
+        for (int i = 0; i < hand.Count; i++)
+        {
+            // Create card instance
+            GameObject cardObj = Instantiate(_cardPrefab, _handPanel.transform);
+            cardObj.SetActive(true);
+            cardObj.name = $"Card_{hand[i].Name}_{i}";  // Naming for debugging
             
-            Destroy(display.gameObject);
+            // Set card data
+            CardDisplay display = cardObj.GetComponent<CardDisplay>();
+            
+            // Critical: Properly initialize the drag operations FIRST
+            InitializeCardDragOperation(display);
+            
+            // Then set the data
+            display.SetCardData(hand[i], i);
+            
+            // Add to list
+            _cardDisplays.Add(display);
+            
+            // Add click handler
+            display.CardClicked += OnCardClicked;
+            display.CardPlayed += OnCardPlayedOnTarget;
+            
+            // Add layout element to control card size
+            LayoutElement layoutElement = cardObj.GetComponent<LayoutElement>();
+            if (layoutElement == null)
+            {
+                layoutElement = cardObj.AddComponent<LayoutElement>();
+            }
+            layoutElement.preferredWidth = 180;
+            layoutElement.preferredHeight = 250;
+            layoutElement.flexibleWidth = 0;
+            
+            // Debug verification
+            Debug.Log($"Card {cardObj.name} created and initialized");
         }
+        
+        GameManager.Instance.LogManager.LogMessage($"Updated hand with {hand.Count} cards");
     }
-    _cardDisplays.Clear();
-    
-    // No cards in hand
-    if (hand == null || hand.Count == 0) return;
-    
-    // Log for debugging
-    Debug.Log($"Creating {hand.Count} cards in hand. Canvas: {(_gameCanvas != null ? _gameCanvas.name : "null")}");
-    
-    // Create card displays
-    for (int i = 0; i < hand.Count; i++)
+
+    private void UpdatePlayerMonsterDisplay()
     {
-        // Create card instance
-        GameObject cardObj = Instantiate(_cardPrefab, _handPanel.transform);
-        cardObj.SetActive(true);
-        cardObj.name = $"Card_{hand[i].Name}_{i}";  // Naming for debugging
+        if (_localPlayerState == null) return;
         
-        // Set card data
-        CardDisplay display = cardObj.GetComponent<CardDisplay>();
-        
-        // Critical: Properly initialize the drag operations FIRST
-        InitializeCardDragOperation(display);
-        
-        // Then set the data
-        display.SetCardData(hand[i], i);
-        
-        // Add to list
-        _cardDisplays.Add(display);
-        
-        // Add click handler
-        display.CardClicked += OnCardClicked;
-        display.CardPlayed += OnCardPlayedOnTarget;
-        
-        // Add layout element to control card size
-        LayoutElement layoutElement = cardObj.GetComponent<LayoutElement>();
-        if (layoutElement == null)
-        {
-            layoutElement = cardObj.AddComponent<LayoutElement>();
+        try {
+            // Get the player's monster
+            Monster playerMonster = null;
+            try { 
+                playerMonster = _localPlayerState.GetMonster();
+            } catch (Exception) { }
+            
+            if (_playerMonsterDisplay != null && playerMonster != null)
+            {
+                _playerMonsterDisplay.SetMonster(playerMonster);
+                _playerMonsterDisplay.SetIsPlayerMonster(true); // Mark as player's monster for targeting
+            }
+            else if (_playerMonsterDisplay != null)
+            {
+                // Create default monster if needed
+                Monster defaultMonster = new Monster
+                {
+                    Name = "Your Monster",
+                    Health = 40,
+                    MaxHealth = 40,
+                    Attack = 5,
+                    Defense = 3,
+                    TintColor = new Color(0.3f, 0.6f, 0.9f) // Blue for player's monster
+                };
+                _playerMonsterDisplay.SetMonster(defaultMonster);
+                _playerMonsterDisplay.SetIsPlayerMonster(true);
+            }
         }
-        layoutElement.preferredWidth = 180;
-        layoutElement.preferredHeight = 250;
-        layoutElement.flexibleWidth = 0;
-        
-        // Debug verification
-        Debug.Log($"Card {cardObj.name} created and initialized");
-    }
-    
-    GameManager.Instance.LogManager.LogMessage($"Updated hand with {hand.Count} cards");
-}
-
-
-private void InitializeCardDragOperation(CardDisplay display)
-{
-    if (display == null)
-    {
-        Debug.LogError("Attempted to initialize null CardDisplay");
-        return;
-    }
-    
-    if (_gameCanvas == null)
-    {
-        Debug.LogError("Game canvas is null when initializing card drag!");
-        // Try to find the canvas
-        _gameCanvas = FindObjectOfType<Canvas>();
-        if (_gameCanvas == null)
-        {
-            Debug.LogError("Could not find any canvas in the scene. Drag operations will fail!");
-            return;
+        catch (Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error updating player monster display: {ex.Message}");
         }
     }
     
-    // Initialize the card drag operation with the proper canvas
-    display.InitializeDragOperation(_gameCanvas);
-    
-    // Debug log
-    Debug.Log($"Card drag initialized with canvas: {_gameCanvas.name}");
-}
-
+    private void UpdateOpponentMonsterDisplay()
+    {
+        if (_localPlayerState == null) return;
+        
+        try {
+            // Get the opponent's monster
+            Monster opponentMonster = null;
+            try {
+                opponentMonster = _localPlayerState.GetOpponentMonster();
+            } catch (Exception) { }
+            
+            if (_opponentMonsterDisplay != null && opponentMonster != null)
+            {
+                _opponentMonsterDisplay.SetMonster(opponentMonster);
+                _opponentMonsterDisplay.SetIsPlayerMonster(false); // Mark as opponent's monster for targeting
+            }
+            else if (_opponentMonsterDisplay != null)
+            {
+                // Create default opponent monster if needed
+                Monster defaultOpponent = new Monster
+                {
+                    Name = "Enemy Monster",
+                    Health = 40,
+                    MaxHealth = 40,
+                    Attack = 5,
+                    Defense = 3,
+                    TintColor = new Color(0.9f, 0.3f, 0.3f) // Red for enemy monster
+                };
+                _opponentMonsterDisplay.SetMonster(defaultOpponent);
+                _opponentMonsterDisplay.SetIsPlayerMonster(false);
+            }
+        }
+        catch (Exception ex) {
+            GameManager.Instance.LogManager.LogMessage($"Error updating opponent monster display: {ex.Message}");
+        }
+    }
 
     private void UpdateOpponentDisplays()
     {
@@ -1008,66 +1149,6 @@ private void InitializeCardDragOperation(CardDisplay display)
         }
     }
 
-    private void UpdateMonsterDisplays()
-    {
-        if (_localPlayerState == null) return;
-        
-        try {
-            // Update player monster
-            Monster playerMonster = null;
-            try { 
-                playerMonster = _localPlayerState.GetMonster();
-            } catch (Exception) { }
-            
-            if (_playerMonsterDisplay != null && playerMonster != null)
-            {
-                _playerMonsterDisplay.SetMonster(playerMonster);
-            }
-            else if (_playerMonsterDisplay != null)
-            {
-                // Create default monster if needed
-                Monster defaultMonster = new Monster
-                {
-                    Name = "Player Monster",
-                    Health = 40,
-                    MaxHealth = 40,
-                    Attack = 5,
-                    Defense = 3,
-                    TintColor = Color.blue
-                };
-                _playerMonsterDisplay.SetMonster(defaultMonster);
-            }
-            
-            // Update opponent monster
-            Monster opponentMonster = null;
-            try {
-                opponentMonster = _localPlayerState.GetOpponentMonster();
-            } catch (Exception) { }
-            
-            if (_opponentMonsterDisplay != null && opponentMonster != null)
-            {
-                _opponentMonsterDisplay.SetMonster(opponentMonster);
-            }
-            else if (_opponentMonsterDisplay != null)
-            {
-                // Create default opponent monster if needed
-                Monster defaultOpponent = new Monster
-                {
-                    Name = "Opponent Monster",
-                    Health = 40,
-                    MaxHealth = 40,
-                    Attack = 5,
-                    Defense = 3,
-                    TintColor = Color.red
-                };
-                _opponentMonsterDisplay.SetMonster(defaultOpponent);
-            }
-        }
-        catch (Exception ex) {
-            GameManager.Instance.LogManager.LogMessage($"Error updating monster displays: {ex.Message}");
-        }
-    }
-
     private void UpdateRoundInfo(int round)
     {
         if (_roundText != null)
@@ -1076,7 +1157,8 @@ private void InitializeCardDragOperation(CardDisplay display)
         }
     }
 
-    private void UpdateTurnInfo(int turnPlayerIndex)
+    // FIXED: Updated to handle player-specific turn state
+    private void UpdateTurnState()
     {
         if (_turnInfoText == null || GameState.Instance == null) return;
         
@@ -1096,7 +1178,7 @@ private void InitializeCardDragOperation(CardDisplay display)
             }
             else
             {
-                _turnInfoText.text = "Opponent's Turn";
+                _turnInfoText.text = "Monster's Turn";
                 _turnInfoText.color = Color.red;
                 
                 // Disable end turn button
@@ -1109,12 +1191,23 @@ private void InitializeCardDragOperation(CardDisplay display)
         catch (Exception ex) {
             GameManager.Instance.LogManager.LogMessage($"Error updating turn info: {ex.Message}");
             
-            // Default to not player's turn when error occurs
-            _turnInfoText.text = "Waiting...";
-            _turnInfoText.color = Color.yellow;
+            // Default to showing player's turn when error occurs
+            // This helps prevent players from being stuck unable to play
+            _turnInfoText.text = "Your Turn";
+            _turnInfoText.color = Color.green;
             if (_endTurnButton != null) {
-                _endTurnButton.interactable = false;
+                _endTurnButton.interactable = true;
             }
+        }
+    }
+
+    // FIXED: Handle player turn changed event
+    private void HandlePlayerTurnChanged(PlayerRef player, bool isPlayerTurn)
+    {
+        // Only update UI if this is the local player
+        if (GameState.Instance != null && player == GameState.Instance.GetLocalPlayerRef())
+        {
+            UpdateTurnState();
         }
     }
 
@@ -1128,16 +1221,23 @@ private void InitializeCardDragOperation(CardDisplay display)
         // Determine target based on card target type
         Monster target = null;
         
+        // Get the appropriate monster target based on card type
         switch (card.Target)
         {
             case CardTarget.Enemy:
             case CardTarget.AllEnemies:
+                // Target opponent's monster
                 target = _localPlayerState.GetOpponentMonster();
                 break;
                 
             case CardTarget.Self:
+                // Target player's own monster
+                target = _localPlayerState.GetMonster();
+                break;
+                
             case CardTarget.All:
-                // Self-targeted cards don't need a target reference
+                // Self-targeted cards don't need a target reference for now
+                // We could enhance this later to affect both monsters
                 break;
         }
         
@@ -1151,7 +1251,6 @@ private void InitializeCardDragOperation(CardDisplay display)
         }
     }
     
-    // New method to handle cards played on targets via drag-and-drop
     private void OnCardPlayedOnTarget(CardDisplay display, GameObject targetObj)
     {
         if (GameState.Instance == null || !GameState.Instance.IsLocalPlayerTurn()) return;
@@ -1166,29 +1265,41 @@ private void InitializeCardDragOperation(CardDisplay display)
         MonsterDisplay monsterDisplay = targetObj.GetComponent<MonsterDisplay>();
         if (monsterDisplay != null)
         {
-            // Determine if it's the player's monster or opponent's monster
-            bool isOpponentMonster = targetObj.name.Contains("Opponent");
+            // Check if it's the player's monster or opponent's monster
+            bool isPlayerMonster = monsterDisplay.IsPlayerMonster();
             
-            if (isOpponentMonster)
-            {
-                // Target is the opponent's monster
-                target = _localPlayerState.GetOpponentMonster();
-            }
-            else
+            if (isPlayerMonster)
             {
                 // Target is the player's own monster
                 target = _localPlayerState.GetMonster();
+                
+                // Verify card can target player's monster
+                if (card.Target != CardTarget.Self && card.Target != CardTarget.All)
+                {
+                    GameManager.Instance.LogManager.LogMessage($"Card {card.Name} cannot target your own monster");
+                    return;
+                }
+            }
+            else
+            {
+                // Target is the opponent's monster
+                target = _localPlayerState.GetOpponentMonster();
+                
+                // Verify card can target opponent's monster
+                if (card.Target != CardTarget.Enemy && card.Target != CardTarget.AllEnemies && card.Target != CardTarget.All)
+                {
+                    GameManager.Instance.LogManager.LogMessage($"Card {card.Name} cannot target opponent's monster");
+                    return;
+                }
             }
         }
         
         // Play the card if we have a valid target
-        if ((target != null && (card.Target == CardTarget.Enemy || card.Target == CardTarget.AllEnemies || 
-                           card.Target == CardTarget.All)) ||
-        (card.Target == CardTarget.Self || card.Target == CardTarget.All))
+        if (target != null)
         {
             try {
                 _localPlayerState.PlayCard(cardIndex, target);
-                GameManager.Instance.LogManager.LogMessage($"Card {card.Name} played against {(target != null ? target.Name : "self")}");
+                GameManager.Instance.LogManager.LogMessage($"Card {card.Name} played against {target.Name}");
                 
                 // Play visual effect
                 PlayCardVisualEffect(display, targetObj);
@@ -1199,7 +1310,6 @@ private void InitializeCardDragOperation(CardDisplay display)
         }
     }
     
-    // New method to create visual effects when playing cards
     private void PlayCardVisualEffect(CardDisplay display, GameObject targetObj)
     {
         CardData card = display.GetCardData();
@@ -1267,7 +1377,6 @@ private void InitializeCardDragOperation(CardDisplay display)
         StartCoroutine(AnimateCardEffect(effectObj));
     }
     
-    // New coroutine to animate the card effect
     private IEnumerator AnimateCardEffect(GameObject effectObj)
     {
         RectTransform rectTransform = effectObj.GetComponent<RectTransform>();
@@ -1331,7 +1440,8 @@ private void InitializeCardDragOperation(CardDisplay display)
         if (_initialized && Time.frameCount % 120 == 0) // Update every 120 frames (~2 seconds)
         {
             UpdateOpponentDisplays();
-            UpdateMonsterDisplays();
+            UpdatePlayerMonsterDisplay();
+            UpdateOpponentMonsterDisplay();
         }
     }
 
@@ -1341,7 +1451,7 @@ private void InitializeCardDragOperation(CardDisplay display)
         PlayerState.OnStatsChanged -= UpdatePlayerStats;
         PlayerState.OnHandChanged -= UpdateHand;
         GameState.OnRoundChanged -= UpdateRoundInfo;
-        GameState.OnTurnChanged -= UpdateTurnInfo;
+        GameState.OnPlayerTurnChanged -= HandlePlayerTurnChanged; // FIXED: Updated to new event
         
         // Unsubscribe from player state events
         if (GameState.Instance != null)

@@ -5,7 +5,7 @@ using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using TMPro;
 
-// Display monster in the monster area with targeting support
+// Display monster in the battle area with targeting support
 public class MonsterDisplay : MonoBehaviour, IDropHandler
 {
     // References
@@ -22,6 +22,9 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
     
     // Visual feedback
     private Image _highlightImage;
+    
+    // Determines if this is the player's own monster (for targeting)
+    private bool _isPlayerMonster = false;
     
     private void Awake()
     {
@@ -194,6 +197,38 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         return Sprite.Create(texture, new Rect(0, 0, 128, 128), new Vector2(0.5f, 0.5f));
     }
     
+    // NEW: Set whether this monster belongs to the player
+    public void SetIsPlayerMonster(bool isPlayerMonster)
+    {
+        _isPlayerMonster = isPlayerMonster;
+        
+        // Update visuals to differentiate
+        if (_isPlayerMonster)
+        {
+            // Player's monster has a blue tint to the background
+            Image bgImage = GetComponent<Image>();
+            if (bgImage != null)
+            {
+                bgImage.color = new Color(0.2f, 0.3f, 0.4f, 0.5f);
+            }
+        }
+        else
+        {
+            // Enemy monster has a red tint to the background
+            Image bgImage = GetComponent<Image>();
+            if (bgImage != null)
+            {
+                bgImage.color = new Color(0.4f, 0.2f, 0.2f, 0.5f);
+            }
+        }
+    }
+    
+    // NEW: Check if this is the player's monster
+    public bool IsPlayerMonster()
+    {
+        return _isPlayerMonster;
+    }
+    
     public void SetMonster(Monster monster)
     {
         if (monster == null)
@@ -311,8 +346,50 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         CardDisplay cardDisplay = droppedObject.GetComponent<CardDisplay>();
         if (cardDisplay == null) return;
         
+        // Get the card data
+        CardData card = cardDisplay.GetCardData();
+        
+        // Check if this card can target this monster based on player/enemy status
+        bool canTarget = false;
+        
+        if (_isPlayerMonster)
+        {
+            // Player's own monster can be targeted by Self or All cards
+            canTarget = (card.Target == CardTarget.Self || card.Target == CardTarget.All);
+        }
+        else
+        {
+            // Opponent's monster can be targeted by Enemy, AllEnemies, or All cards
+            canTarget = (card.Target == CardTarget.Enemy || 
+                        card.Target == CardTarget.AllEnemies || 
+                        card.Target == CardTarget.All);
+        }
+        
+        if (!canTarget)
+        {
+            // Show invalid target feedback
+            StartCoroutine(FlashInvalidTarget());
+            GameManager.Instance.LogManager.LogMessage($"Cannot target this monster with card {card.Name}");
+            return;
+        }
+        
         // Card dropped event will be handled by the CardDisplay component
         ShowHighlight(false);
+    }
+    
+    // NEW: Visual feedback for invalid targeting
+    private IEnumerator FlashInvalidTarget()
+    {
+        if (_highlightImage == null)
+            yield break;
+            
+        // Flash red to indicate invalid target
+        _highlightImage.color = new Color(1f, 0f, 0f, 0.5f);
+        
+        yield return new WaitForSeconds(0.2f);
+        
+        // Hide highlight
+        _highlightImage.color = new Color(1f, 1f, 0.5f, 0f);
     }
     
     // Show highlight when valid card is dragged over

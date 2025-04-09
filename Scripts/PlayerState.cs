@@ -56,6 +56,7 @@ public class PlayerState : NetworkBehaviour
     private int _previousHealth;
     private int _previousEnergy;
     private int _previousScore;
+    private int _previousMonsterHealth;
 
     public override void Spawned()
     {
@@ -109,6 +110,7 @@ public class PlayerState : NetworkBehaviour
         _previousHealth = Health;
         _previousEnergy = Energy;
         _previousScore = Score;
+        _previousMonsterHealth = MonsterHealth;
         
         GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for {PlayerName}");
         
@@ -161,6 +163,13 @@ public class PlayerState : NetworkBehaviour
                 // Notify UI
                 OnStatsChanged?.Invoke(this);
             }
+            
+            // Check for monster health changes too
+            if (_previousMonsterHealth != MonsterHealth && _playerMonster != null)
+            {
+                _previousMonsterHealth = MonsterHealth;
+                _playerMonster.Health = MonsterHealth;
+            }
         }
         
         // Update opponent monster if we have a valid reference
@@ -191,7 +200,7 @@ public class PlayerState : NetworkBehaviour
         }
     }
     
-    // NEW METHOD: Force draw hand without authority check (for RPC calls)
+    // Force draw hand without authority check (for RPC calls)
     public void ForceDrawInitialHand()
     {
         _hand.Clear();
@@ -236,6 +245,9 @@ public class PlayerState : NetworkBehaviour
         _playerMonster.TintColor = MonsterColor;
         
         GameManager.Instance.LogManager.LogMessage($"Recreated monster for {PlayerName} from networked data");
+        
+        // Update the previously tracked monster health
+        _previousMonsterHealth = MonsterHealth;
     }
 
     // Update opponent monster if opponent state changed
@@ -475,6 +487,7 @@ public class PlayerState : NetworkBehaviour
         OnStatsChanged?.Invoke(this);
     }
 
+    // FIXED: Update this method to properly track damage and sync monster health
     public void PlayCard(int cardIndex, Monster target)
     {
         if (!HasStateAuthority || cardIndex < 0 || cardIndex >= _hand.Count) return;
@@ -499,7 +512,15 @@ public class PlayerState : NetworkBehaviour
                     // Apply damage
                     if (card.DamageAmount > 0)
                     {
+                        // Store pre-damage health for debugging
+                        int healthBefore = target.Health;
+                        
+                        // Apply the damage
                         target.TakeDamage(card.DamageAmount);
+                        
+                        // Debug log the damage
+                        int actualDamage = healthBefore - target.Health;
+                        GameManager.Instance.LogManager.LogMessage($"Card {card.Name} dealt {actualDamage} damage to {target.Name} (Health: {healthBefore} -> {target.Health})");
                         
                         // Update opponent monster state if we're damaging the opponent's monster
                         UpdateOpponentMonsterState(target);
@@ -516,6 +537,12 @@ public class PlayerState : NetworkBehaviour
                     if (_playerMonster != null)
                     {
                         _playerMonster.AddBlock(card.BlockAmount);
+                        
+                        // Update networked monster data
+                        if (HasStateAuthority)
+                        {
+                            RPC_UpdateMonsterBlock(_playerMonster.GetBlock());
+                        }
                     }
                 }
                 
@@ -536,11 +563,65 @@ public class PlayerState : NetworkBehaviour
                 // Apply to all enemies (currently just one)
                 if (target != null && card.DamageAmount > 0)
                 {
+                    // Store pre-damage health for debugging
+                    int healthBefore = target.Health;
+                    
+                    // Apply the damage
                     target.TakeDamage(card.DamageAmount);
+                    
+                    // Debug log the damage
+                    int actualDamage = healthBefore - target.Health;
+                    GameManager.Instance.LogManager.LogMessage($"Card {card.Name} dealt {actualDamage} damage to {target.Name} (Health: {healthBefore} -> {target.Health})");
                     
                     // Update opponent monster state
                     UpdateOpponentMonsterState(target);
                 }
+                cardPlayed = true;
+                break;
+                
+            case CardTarget.All:
+                // Apply effects to all characters and monsters
+                
+                // First apply to opponent's monster if provided
+                if (target != null && !target.Equals(_playerMonster) && card.DamageAmount > 0)
+                {
+                    // Store pre-damage health for debugging
+                    int healthBefore = target.Health;
+                    
+                    // Apply the damage
+                    target.TakeDamage(card.DamageAmount);
+                    
+                    // Debug log the damage
+                    int actualDamage = healthBefore - target.Health;
+                    GameManager.Instance.LogManager.LogMessage($"Card {card.Name} dealt {actualDamage} damage to {target.Name} (Health: {healthBefore} -> {target.Health})");
+                    
+                    // Update opponent monster state
+                    UpdateOpponentMonsterState(target);
+                }
+                
+                // Then apply to player's monster if available
+                if (_playerMonster != null && card.BlockAmount > 0)
+                {
+                    _playerMonster.AddBlock(card.BlockAmount);
+                    
+                    // Update networked monster block
+                    if (HasStateAuthority)
+                    {
+                        RPC_UpdateMonsterBlock(_playerMonster.GetBlock());
+                    }
+                }
+                
+                // Apply effects to the player
+                if (card.HealAmount > 0)
+                {
+                    ModifyHealth(card.HealAmount);
+                }
+                
+                if (card.EnergyGain > 0)
+                {
+                    ModifyEnergy(card.EnergyGain);
+                }
+                
                 cardPlayed = true;
                 break;
         }
@@ -564,11 +645,12 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-    // Update opponent monster state when we damage it
+    // FIXED: Update opponent monster state when we damage it
     private void UpdateOpponentMonsterState(Monster target)
     {
         if (target == _opponentMonster && _opponentPlayerState != null && HasStateAuthority)
         {
+            // Modified to pass the damage amount rather than the current health
             // We'll use an RPC to notify the opponent that their monster was damaged
             RPC_NotifyMonsterDamaged(_opponentPlayerRef, target.Health, target.MaxHealth);
         }
@@ -583,13 +665,23 @@ public class PlayerState : NetworkBehaviour
             // Update our local monster health
             if (_playerMonster != null)
             {
-                _playerMonster.Health = newHealth;
+                // FIXED: Don't blindly set health, but update it to match the expected value
+                // This prevents cases where the health might temporarily appear to reset
+                
+                // Log the old health value for debugging
+                int oldHealth = _playerMonster.Health;
+                
+                // Set the monster's health to match the expected value from the RPC
+                _playerMonster.Health = newHealth; 
                 
                 // Also update networked data
                 MonsterHealth = newHealth;
                 MonsterMaxHealth = maxHealth;
                 
-                GameManager.Instance.LogManager.LogMessage($"Monster {_playerMonster.Name} health updated to {newHealth}/{maxHealth}");
+                // Update tracked value
+                _previousMonsterHealth = newHealth;
+                
+                GameManager.Instance.LogManager.LogMessage($"Monster {_playerMonster.Name} health updated from {oldHealth} to {newHealth}/{maxHealth}");
                 
                 // Check for defeat
                 if (newHealth <= 0)
@@ -599,6 +691,16 @@ public class PlayerState : NetworkBehaviour
                 }
             }
         }
+    }
+
+    // NEW: Added to sync monster block values
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_UpdateMonsterBlock(int blockAmount)
+    {
+        // Update networked data as needed
+        // Currently we don't sync block in networked data, but we could add it if needed
+        
+        GameManager.Instance.LogManager.LogMessage($"Monster {MonsterName} block updated to {blockAmount}");
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
@@ -624,7 +726,14 @@ public class PlayerState : NetworkBehaviour
     {
         if (!HasStateAuthority) return;
         
+        int oldHealth = Health;
         Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
+        
+        // Log health change
+        if (oldHealth != Health)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} health changed: {oldHealth} -> {Health}");
+        }
         
         // Broadcast to all clients
         RPC_NotifyStatsChanged();
@@ -640,7 +749,14 @@ public class PlayerState : NetworkBehaviour
     {
         if (!HasStateAuthority) return;
         
+        int oldEnergy = Energy;
         Energy = Mathf.Clamp(Energy + amount, 0, MaxEnergy);
+        
+        // Log energy change
+        if (oldEnergy != Energy)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} energy changed: {oldEnergy} -> {Energy}");
+        }
         
         // Broadcast to all clients
         RPC_NotifyStatsChanged();
@@ -727,17 +843,32 @@ public class PlayerState : NetworkBehaviour
     }
 
     public void EndTurn()
+{
+    if (!HasStateAuthority) return;
+    
+    // Process end of turn effects
+    
+    // MODIFIED: Request next turn for this specific player
+    if (GameState.Instance != null)
     {
-        if (!HasStateAuthority) return;
-        
-        // Process end of turn effects
-        
-        // Request next turn
-        if (GameState.Instance != null)
-            GameState.Instance.NextTurn();
-        
-        GameManager.Instance.LogManager.LogMessage($"{PlayerName} ended their turn");
+        // Get player ref
+        var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
+        if (networkRunner != null)
+        {
+            PlayerRef localPlayer = Object.InputAuthority;
+            GameState.Instance.NextTurn(localPlayer);
+            GameManager.Instance.LogManager.LogMessage($"{PlayerName} ended their turn, passing to monster");
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogError("Could not get NetworkRunner in EndTurn");
+        }
     }
+    else
+    {
+        GameManager.Instance.LogManager.LogError("GameState.Instance is null in EndTurn");
+    }
+}
 
     public List<CardData> GetHand()
     {

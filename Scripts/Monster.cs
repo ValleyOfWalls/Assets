@@ -30,6 +30,7 @@ public class Monster
     {
         if (amount <= 0) return;
         
+        int healthBefore = Health;
         int damageAfterBlock = amount;
         
         // Apply block if available
@@ -46,6 +47,7 @@ public class Monster
                 _block = 0;
             }
             
+            // Notify about block change
             OnBlockChanged?.Invoke(_block);
         }
         
@@ -57,11 +59,18 @@ public class Monster
             int reducedDamage = Mathf.Max(1, Mathf.FloorToInt(damageAfterBlock * (1f - damageReduction)));
             
             Health = Mathf.Max(0, Health - reducedDamage);
-            OnHealthChanged?.Invoke(Health, MaxHealth);
             
-            // Log damage
+            // Log damage with detailed information
             if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage($"{Name} took {reducedDamage} damage (reduced from {damageAfterBlock})");
+                GameManager.Instance.LogManager.LogMessage($"{Name} took {reducedDamage} damage (reduced from {damageAfterBlock}), health: {healthBefore} -> {Health}");
+            
+            // Notify with health change
+            OnHealthChanged?.Invoke(Health, MaxHealth);
+        }
+        else {
+            // Log blocked damage
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"{Name} blocked all {amount} damage with {_block} block remaining");
         }
     }
     
@@ -69,17 +78,26 @@ public class Monster
     {
         if (amount <= 0) return;
         
+        int healthBefore = Health;
         int newHealth = Mathf.Min(MaxHealth, Health + amount);
         int actualHeal = newHealth - Health;
         
         if (actualHeal > 0)
         {
             Health = newHealth;
+            
+            // Notify with health change
             OnHealthChanged?.Invoke(Health, MaxHealth);
             
             // Log healing
             if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage($"{Name} healed for {actualHeal} HP");
+                GameManager.Instance.LogManager.LogMessage($"{Name} healed for {actualHeal} HP (health: {healthBefore} -> {Health})");
+        }
+        else
+        {
+            // Log when no healing occurs (already at max)
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"{Name} could not be healed (already at max health: {Health}/{MaxHealth})");
         }
     }
     
@@ -87,12 +105,18 @@ public class Monster
     {
         if (amount <= 0) return;
         
+        int previousBlock = _block;
         _block += amount;
-        OnBlockChanged?.Invoke(_block);
         
-        // Log block addition
-        if (GameManager.Instance != null)
-            GameManager.Instance.LogManager.LogMessage($"{Name} gained {amount} block, now has {_block} block");
+        // Only invoke the event if block actually changed
+        if (_block != previousBlock)
+        {
+            OnBlockChanged?.Invoke(_block);
+            
+            // Log block addition
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"{Name} gained {amount} block, now has {_block} block");
+        }
     }
     
     public int GetBlock()
@@ -109,8 +133,13 @@ public class Monster
     {
         Health = MaxHealth;
         _block = 0;
+        
+        // Notify about resets
         OnHealthChanged?.Invoke(Health, MaxHealth);
         OnBlockChanged?.Invoke(_block);
+        
+        if (GameManager.Instance != null)
+            GameManager.Instance.LogManager.LogMessage($"{Name} stats reset to full");
     }
     
     // Create a visual effect at the monster's position
