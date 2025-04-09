@@ -36,7 +36,7 @@ public class GameUI : MonoBehaviour
     
     // Opponent references
     private GameObject _opponentStatsPrefab;
-    private Dictionary<PlayerRef, OpponentStatsDisplay> _opponentDisplays = new Dictionary<PlayerRef, OpponentStatsDisplay>();
+    private Dictionary<string, OpponentStatsDisplay> _opponentDisplays = new Dictionary<string, OpponentStatsDisplay>();
     
     // Button references
     private Button _endTurnButton;
@@ -611,54 +611,49 @@ public class GameUI : MonoBehaviour
     }
 
     private void HideLobbyUI()
-{
-    // Hide the lobby UI elements when the game starts
-    var uiManager = GameManager.Instance.UIManager;
-    if (uiManager != null)
     {
-        try
+        // Hide the lobby UI elements when the game starts
+        var uiManager = GameManager.Instance.UIManager;
+        if (uiManager != null)
         {
-            // Force hide all UI through the UIManager - most direct approach
-            uiManager.HideAllUI();
-            GameManager.Instance.LogManager.LogMessage("Forced hiding of all lobby UI components");
-            
-            // Additionally, find and destroy all canvases starting with "UI Canvas" or "UI_Canvas"
-            // This is a more aggressive approach to ensure UI is gone
-            Canvas[] allCanvases = FindObjectsOfType<Canvas>();
-            foreach (Canvas canvas in allCanvases)
+            try
             {
-                if (canvas.name.StartsWith("UI Canvas") || canvas.name.StartsWith("UI_Canvas"))
+                // Force hide all UI through the UIManager
+                uiManager.HideAllUI();
+                GameManager.Instance.LogManager.LogMessage("Forced hiding of all lobby UI components");
+                
+                // Additionally, find and destroy all lobby canvases
+                Canvas[] allCanvases = FindObjectsOfType<Canvas>();
+                foreach (Canvas canvas in allCanvases)
                 {
-                    if (canvas.gameObject != _gameCanvas.gameObject) // Don't destroy our game UI canvas
+                    if (canvas.gameObject != _gameCanvas.gameObject && 
+                        (canvas.name.StartsWith("UI Canvas") || canvas.name.StartsWith("UI_Canvas")))
                     {
                         GameManager.Instance.LogManager.LogMessage($"Destroying lobby UI canvas: {canvas.name}");
                         Destroy(canvas.gameObject);
                     }
                 }
-            }
-            
-            // Also try to find specific panels by name in the entire scene
-            GameObject[] allObjects = FindObjectsOfType<GameObject>();
-            foreach (GameObject obj in allObjects)
-            {
-                // Check for panels with typical lobby UI names
-                if (obj.name == "Lobby Panel" || obj.name == "Connect Panel" || 
-                    obj.name == "Game Started Panel" || obj.name == "LobbyPanel" || 
-                    obj.name == "ConnectPanel")
+                
+                // Also try to find specific panels by name
+                string[] panelNames = {"Lobby Panel", "Connect Panel", "Game Started Panel", "LobbyPanel", "ConnectPanel"};
+                foreach (string panelName in panelNames)
                 {
-                    GameManager.Instance.LogManager.LogMessage($"Found and destroying panel: {obj.name}");
-                    Destroy(obj);
+                    GameObject panel = GameObject.Find(panelName);
+                    if (panel != null)
+                    {
+                        GameManager.Instance.LogManager.LogMessage($"Found and destroying panel: {panel.name}");
+                        Destroy(panel);
+                    }
                 }
             }
+            catch (System.Exception ex)
+            {
+                GameManager.Instance.LogManager.LogError($"Error hiding lobby UI: {ex.Message}");
+            }
+            
+            GameManager.Instance.LogManager.LogMessage("Lobby UI complete destruction procedure completed");
         }
-        catch (System.Exception ex)
-        {
-            GameManager.Instance.LogManager.LogError($"Error hiding lobby UI: {ex.Message}");
-        }
-        
-        GameManager.Instance.LogManager.LogMessage("Lobby UI complete destruction procedure completed");
     }
-}
 
     private void UpdateAllUI()
     {
@@ -768,35 +763,72 @@ public class GameUI : MonoBehaviour
         try {
             // Get all player states
             var playerStates = GameState.Instance?.GetAllPlayerStates();
-            if (playerStates == null) return;
+            if (playerStates == null || playerStates.Count == 0)
+            {
+                GameManager.Instance.LogManager.LogMessage("No player states found for opponent displays");
+                return;
+            }
             
             PlayerRef localPlayerRef = GameState.Instance.GetLocalPlayerRef();
             
-            // Clear existing displays
-            foreach (var display in _opponentDisplays.Values)
+            // Clear existing displays that aren't in the current player list
+            List<string> displayKeysToRemove = new List<string>();
+            foreach (var key in _opponentDisplays.Keys)
             {
-                if (display != null && display.gameObject != null)
+                bool stillExists = false;
+                foreach (var entry in playerStates)
                 {
-                    Destroy(display.gameObject);
+                    if (entry.Key != localPlayerRef && entry.Value.PlayerName.ToString() == key)
+                    {
+                        stillExists = true;
+                        break;
+                    }
+                }
+                
+                if (!stillExists)
+                {
+                    displayKeysToRemove.Add(key);
                 }
             }
-            _opponentDisplays.Clear();
+            
+            foreach (var key in displayKeysToRemove)
+            {
+                if (_opponentDisplays[key] != null && _opponentDisplays[key].gameObject != null)
+                {
+                    Destroy(_opponentDisplays[key].gameObject);
+                }
+                _opponentDisplays.Remove(key);
+            }
             
             // Create display for each opponent
             foreach (var entry in playerStates)
             {
                 if (entry.Key != localPlayerRef)
                 {
-                    // Create opponent display
-                    GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
-                    opponentObj.SetActive(true);
+                    string playerName = entry.Value.PlayerName.ToString();
                     
-                    // Set data
-                    OpponentStatsDisplay display = opponentObj.GetComponent<OpponentStatsDisplay>();
+                    // Skip empty names
+                    if (string.IsNullOrEmpty(playerName))
+                        continue;
+                    
+                    // Create or update opponent display
+                    OpponentStatsDisplay display;
+                    if (_opponentDisplays.ContainsKey(playerName))
+                    {
+                        // Update existing display
+                        display = _opponentDisplays[playerName];
+                    }
+                    else
+                    {
+                        // Create new display
+                        GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
+                        opponentObj.SetActive(true);
+                        display = opponentObj.GetComponent<OpponentStatsDisplay>();
+                        _opponentDisplays.Add(playerName, display);
+                    }
+                    
+                    // Update display data
                     display.UpdateDisplay(entry.Value);
-                    
-                    // Add to dictionary
-                    _opponentDisplays.Add(entry.Key, display);
                 }
             }
             
@@ -837,7 +869,7 @@ public class GameUI : MonoBehaviour
                 _playerMonsterDisplay.SetMonster(defaultMonster);
             }
             
-            // Update opponent monster - similar approach with null checking
+            // Update opponent monster
             Monster opponentMonster = null;
             try {
                 opponentMonster = _localPlayerState.GetOpponentMonster();
@@ -970,6 +1002,13 @@ public class GameUI : MonoBehaviour
         {
             Initialize();
         }
+        
+        // Periodically update UI to ensure opponent displays and monster displays stay in sync
+        if (_initialized && Time.frameCount % 30 == 0) // Update every 30 frames (~0.5 seconds)
+        {
+            UpdateOpponentDisplays();
+            UpdateMonsterDisplays();
+        }
     }
 
     private void OnDestroy()
@@ -980,8 +1019,4 @@ public class GameUI : MonoBehaviour
         GameState.OnRoundChanged -= UpdateRoundInfo;
         GameState.OnTurnChanged -= UpdateTurnInfo;
     }
-
-    // Add this method to your existing GameUI.cs file
-
-
 }

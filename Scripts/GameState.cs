@@ -126,14 +126,25 @@ public class GameState : NetworkBehaviour
     // New coroutine to delay matchup assignment
     private IEnumerator DelayedMatchupAssignment()
     {
-        // Wait a short time for all player states to initialize
+        // Wait for player states to stabilize
         yield return new WaitForSeconds(1.0f);
+        
+        // Log player count
+        GameManager.Instance.LogManager.LogMessage($"Players registered with GameState: {_playerStates.Count}");
+        foreach (var entry in _playerStates)
+        {
+            GameManager.Instance.LogManager.LogMessage($"  - Player {entry.Key}: {entry.Value.PlayerName}");
+        }
         
         // Assign initial monster matchups
         AssignMonsterMatchups();
         
-        // Deal initial cards
+        // Deal initial cards to all players
         DealInitialCards();
+        
+        // Start first turn
+        CurrentTurnPlayerIndex = 0;
+        OnTurnChanged?.Invoke(CurrentTurnPlayerIndex);
     }
 
     private void AssignMonsterMatchups()
@@ -141,8 +152,18 @@ public class GameState : NetworkBehaviour
         if (_playerStates.Count < 2)
         {
             if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage("Not enough players to assign matchups");
-            return;
+                GameManager.Instance.LogManager.LogMessage("Not enough players to assign matchups, adding AI opponent");
+            
+            // For single-player testing, create an AI opponent
+            if (_playerStates.Count == 1 && HasStateAuthority)
+            {
+                // Just match the player against their own monster for now
+                // In the future, you could create an AI player
+                PlayerRef playerRef = _turnOrder[0];
+                RPC_SetMonsterMatchup(playerRef, playerRef);
+                GameManager.Instance.LogManager.LogMessage($"Single player mode: Player {playerRef} vs own monster");
+                return;
+            }
         }
 
         // Create a list of all players
@@ -170,28 +191,10 @@ public class GameState : NetworkBehaviour
         if (_playerStates.TryGetValue(player, out PlayerState playerState) && 
             _playerStates.TryGetValue(monsterOwner, out PlayerState monsterState))
         {
-            Monster opponentMonster = monsterState.GetMonster();
-            if (opponentMonster == null)
-            {
-                if (GameManager.Instance != null)
-                    GameManager.Instance.LogManager.LogMessage($"Warning: Monster from player {monsterOwner} is null");
-                
-                // Create a temporary monster if needed
-                opponentMonster = new Monster
-                {
-                    Name = $"Temporary Monster",
-                    Health = 40,
-                    MaxHealth = 40,
-                    Attack = 5,
-                    Defense = 3,
-                    TintColor = Color.red
-                };
-            }
+            // Set the opponent monster reference using the PlayerState reference
+            playerState.SetOpponentMonster(monsterOwner, monsterState);
             
-            playerState.SetOpponentMonster(opponentMonster);
-            
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage($"Set monster matchup for player {player}");
+            GameManager.Instance.LogManager.LogMessage($"Set monster matchup for player {player}");
         }
         else
         {
@@ -206,6 +209,7 @@ public class GameState : NetworkBehaviour
         {
             // Deal initial cards to each player
             playerEntry.Value.DrawInitialHand();
+            GameManager.Instance.LogManager.LogMessage($"Dealing initial cards to {playerEntry.Value.PlayerName}");
         }
     }
 
@@ -278,6 +282,9 @@ public class GameState : NetworkBehaviour
         // After draft phase completes:
         // DraftPhaseActive = false;
         // StartNextRound();
+        
+        // For now, just start next round immediately
+        StartNextRound();
     }
 
     private void StartNextRound()
@@ -337,7 +344,7 @@ public class GameState : NetworkBehaviour
 
     public Dictionary<PlayerRef, PlayerState> GetAllPlayerStates()
     {
-        return _playerStates;
+        return new Dictionary<PlayerRef, PlayerState>(_playerStates);
     }
 
     public PlayerRef GetLocalPlayerRef()
@@ -354,7 +361,13 @@ public class GameState : NetworkBehaviour
         if (networkRunner == null) return false;
         
         PlayerRef localPlayer = networkRunner.LocalPlayer;
-        return _turnOrder[CurrentTurnPlayerIndex] == localPlayer;
+        
+        if (CurrentTurnPlayerIndex >= 0 && CurrentTurnPlayerIndex < _turnOrder.Count)
+        {
+            return _turnOrder[CurrentTurnPlayerIndex] == localPlayer;
+        }
+        
+        return false;
     }
 
     // Safe accessors for networked properties
