@@ -36,7 +36,7 @@ public class GameUI : MonoBehaviour
     
     // Opponent references
     private GameObject _opponentStatsPrefab;
-    private Dictionary<string, OpponentStatsDisplay> _opponentDisplays = new Dictionary<string, OpponentStatsDisplay>();
+    private Dictionary<PlayerRef, OpponentStatsDisplay> _opponentDisplays = new Dictionary<PlayerRef, OpponentStatsDisplay>();
     
     // Button references
     private Button _endTurnButton;
@@ -105,6 +105,10 @@ public class GameUI : MonoBehaviour
             GameState.OnRoundChanged += UpdateRoundInfo;
             GameState.OnTurnChanged += UpdateTurnInfo;
             
+            // Subscribe to GameState player registration events
+            GameState.OnPlayerStateAdded += SubscribeToOpponentState;
+            GameState.OnPlayerStateRemoved += UnsubscribeFromOpponentState;
+            
             _initialized = true;
             _initializationInProgress = false;
             GameManager.Instance.LogManager.LogMessage("GameUI fully initialized");
@@ -115,12 +119,119 @@ public class GameUI : MonoBehaviour
             // Initial UI update
             UpdateAllUI();
             
+            // Do an immediate attempt to find and subscribe to all opponent states
+            InitializeOpponentStates();
+            
             yield break; // Successful initialization, exit coroutine
         }
         
         // If we get here, initialization failed after max retries
         GameManager.Instance.LogManager.LogError("Failed to initialize GameUI after maximum retries");
         _initializationInProgress = false;
+    }
+
+    // Subscribe to all existing opponent states
+    private void InitializeOpponentStates()
+    {
+        if (GameState.Instance == null) return;
+        
+        GameManager.Instance.LogManager.LogMessage("Initializing opponent states");
+        
+        var allPlayerStates = GameState.Instance.GetAllPlayerStates();
+        PlayerRef localPlayerRef = GameState.Instance.GetLocalPlayerRef();
+        
+        foreach (var entry in allPlayerStates)
+        {
+            if (entry.Key != localPlayerRef)
+            {
+                SubscribeToOpponentState(entry.Key, entry.Value);
+            }
+        }
+    }
+    
+    // Subscribe to a specific opponent's state
+    private void SubscribeToOpponentState(PlayerRef playerRef, PlayerState playerState)
+    {
+        if (GameState.Instance == null) return;
+        if (playerRef == GameState.Instance.GetLocalPlayerRef()) return;
+        
+        GameManager.Instance.LogManager.LogMessage($"Subscribing to opponent state: {playerState.PlayerName}");
+        
+        // Create the opponent display if it doesn't exist
+        if (!_opponentDisplays.ContainsKey(playerRef))
+        {
+            CreateOpponentDisplay(playerRef, playerState);
+        }
+        
+        // Update the display with current data
+        UpdateOpponentDisplay(playerRef, playerState);
+    }
+    
+    // Unsubscribe from a specific opponent's state
+    private void UnsubscribeFromOpponentState(PlayerRef playerRef, PlayerState playerState)
+    {
+        if (_opponentDisplays.ContainsKey(playerRef))
+        {
+            GameManager.Instance.LogManager.LogMessage($"Unsubscribing from opponent state: {playerState.PlayerName}");
+            
+            // Destroy the display object
+            if (_opponentDisplays[playerRef] != null && _opponentDisplays[playerRef].gameObject != null)
+            {
+                Destroy(_opponentDisplays[playerRef].gameObject);
+            }
+            
+            // Remove from the dictionary
+            _opponentDisplays.Remove(playerRef);
+        }
+    }
+    
+    // Create display for a specific opponent
+    private void CreateOpponentDisplay(PlayerRef playerRef, PlayerState playerState)
+{
+    if (_opponentsPanel == null || _opponentStatsPrefab == null) {
+        GameManager.Instance.LogManager.LogError("Cannot create opponent display: panel or prefab is null");
+        return;
+    }
+    
+    string playerName = playerState?.PlayerName.ToString() ?? "Unknown";
+    GameManager.Instance.LogManager.LogMessage($"Creating opponent display for {playerName}");
+    
+    // Create new display
+    GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
+    opponentObj.SetActive(true);
+    opponentObj.name = $"OpponentDisplay_{playerName}";
+    
+    OpponentStatsDisplay display = opponentObj.GetComponent<OpponentStatsDisplay>();
+    if (display != null)
+    {
+        // Force create text elements if needed
+        display.ForceCreateTextElements();
+        
+        // Store in the dictionary
+        _opponentDisplays[playerRef] = display;
+        
+        // Update with player state
+        display.UpdateDisplay(playerState);
+    }
+    else
+    {
+        GameManager.Instance.LogManager.LogError("OpponentStatsDisplay component not found on instantiated prefab");
+    }
+}
+    
+    // Update a specific opponent's display
+    private void UpdateOpponentDisplay(PlayerRef playerRef, PlayerState playerState)
+    {
+        if (!_opponentDisplays.ContainsKey(playerRef) || _opponentDisplays[playerRef] == null)
+        {
+            CreateOpponentDisplay(playerRef, playerState);
+        }
+        
+        if (_opponentDisplays.ContainsKey(playerRef) && _opponentDisplays[playerRef] != null)
+        {
+            _opponentDisplays[playerRef].UpdateDisplay(playerState);
+            GameManager.Instance.LogManager.LogMessage($"Updated opponent display for {playerState.PlayerName}");
+        }
     }
 
     private void CreateMainCanvas()
@@ -353,8 +464,7 @@ public class GameUI : MonoBehaviour
         // Create opponent stats prefab
         _opponentStatsPrefab = CreateOpponentStatsPrefab();
         
-        // Add all opponents
-        UpdateOpponentDisplays();
+        // Don't add opponents here, we'll do it in SubscribeToOpponentState
         
         GameManager.Instance.LogManager.LogMessage("Opponents panel created");
     }
@@ -761,8 +871,10 @@ public class GameUI : MonoBehaviour
     private void UpdateOpponentDisplays()
     {
         try {
+            if (GameState.Instance == null) return;
+            
             // Get all player states
-            var playerStates = GameState.Instance?.GetAllPlayerStates();
+            var playerStates = GameState.Instance.GetAllPlayerStates();
             if (playerStates == null || playerStates.Count == 0)
             {
                 GameManager.Instance.LogManager.LogMessage("No player states found for opponent displays");
@@ -771,64 +883,28 @@ public class GameUI : MonoBehaviour
             
             PlayerRef localPlayerRef = GameState.Instance.GetLocalPlayerRef();
             
-            // Clear existing displays that aren't in the current player list
-            List<string> displayKeysToRemove = new List<string>();
-            foreach (var key in _opponentDisplays.Keys)
+            // Remove opponents that aren't in the current game
+            List<PlayerRef> playersToRemove = new List<PlayerRef>();
+            foreach (var playerRef in _opponentDisplays.Keys)
             {
-                bool stillExists = false;
-                foreach (var entry in playerStates)
+                if (!playerStates.ContainsKey(playerRef))
                 {
-                    if (entry.Key != localPlayerRef && entry.Value.PlayerName.ToString() == key)
-                    {
-                        stillExists = true;
-                        break;
-                    }
-                }
-                
-                if (!stillExists)
-                {
-                    displayKeysToRemove.Add(key);
+                    playersToRemove.Add(playerRef);
                 }
             }
             
-            foreach (var key in displayKeysToRemove)
+            foreach (var playerRef in playersToRemove)
             {
-                if (_opponentDisplays[key] != null && _opponentDisplays[key].gameObject != null)
-                {
-                    Destroy(_opponentDisplays[key].gameObject);
-                }
-                _opponentDisplays.Remove(key);
+                UnsubscribeFromOpponentState(playerRef, null);
             }
             
-            // Create display for each opponent
+            // Update or create displays for each opponent
             foreach (var entry in playerStates)
             {
                 if (entry.Key != localPlayerRef)
                 {
-                    string playerName = entry.Value.PlayerName.ToString();
-                    
-                    // Skip empty names
-                    if (string.IsNullOrEmpty(playerName))
-                        continue;
-                    
-                    // Create or update opponent display
-                    OpponentStatsDisplay display;
-                    if (_opponentDisplays.ContainsKey(playerName))
-                    {
-                        // Update existing display
-                        display = _opponentDisplays[playerName];
-                    }
-                    else
-                    {
-                        // Create new display
-                        GameObject opponentObj = Instantiate(_opponentStatsPrefab, _opponentsPanel.transform);
-                        opponentObj.SetActive(true);
-                        display = opponentObj.GetComponent<OpponentStatsDisplay>();
-                        _opponentDisplays.Add(playerName, display);
-                    }
-                    
-                    // Update display data
-                    display.UpdateDisplay(entry.Value);
+                    // Update display if it exists, create it if it doesn't
+                    UpdateOpponentDisplay(entry.Key, entry.Value);
                 }
             }
             
@@ -1003,8 +1079,8 @@ public class GameUI : MonoBehaviour
             Initialize();
         }
         
-        // Periodically update UI to ensure opponent displays and monster displays stay in sync
-        if (_initialized && Time.frameCount % 30 == 0) // Update every 30 frames (~0.5 seconds)
+        // Periodically update UI as a fallback but much less frequently
+        if (_initialized && Time.frameCount % 120 == 0) // Update every 120 frames (~2 seconds)
         {
             UpdateOpponentDisplays();
             UpdateMonsterDisplays();
@@ -1018,5 +1094,12 @@ public class GameUI : MonoBehaviour
         PlayerState.OnHandChanged -= UpdateHand;
         GameState.OnRoundChanged -= UpdateRoundInfo;
         GameState.OnTurnChanged -= UpdateTurnInfo;
+        
+        // Unsubscribe from player state events
+        if (GameState.Instance != null)
+        {
+            GameState.OnPlayerStateAdded -= SubscribeToOpponentState;
+            GameState.OnPlayerStateRemoved -= UnsubscribeFromOpponentState;
+        }
     }
 }

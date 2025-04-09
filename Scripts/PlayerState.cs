@@ -51,6 +51,11 @@ public class PlayerState : NetworkBehaviour
 
     // Change detector
     private ChangeDetector _changeDetector;
+    
+    // Track previous values for local change detection
+    private int _previousHealth;
+    private int _previousEnergy;
+    private int _previousScore;
 
     public override void Spawned()
     {
@@ -100,6 +105,11 @@ public class PlayerState : NetworkBehaviour
         // Initialize change detector for networked properties
         _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState);
         
+        // Store initial values for local change detection
+        _previousHealth = Health;
+        _previousEnergy = Energy;
+        _previousScore = Score;
+        
         GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for {PlayerName}");
         
         // Attempt to register with GameState if available, otherwise schedule for later
@@ -127,6 +137,29 @@ public class PlayerState : NetworkBehaviour
             {
                 // Update monster if monster properties changed
                 RecreateMonsterFromNetworkedData();
+            }
+            else if (change == nameof(Health) || change == nameof(MaxHealth) ||
+                    change == nameof(Energy) || change == nameof(MaxEnergy) ||
+                    change == nameof(Score))
+            {
+                // Notify UI about stats change
+                OnStatsChanged?.Invoke(this);
+            }
+        }
+        
+        // Also check for changes in properties even if we're not the state authority
+        // This helps ensure UI updates for all clients
+        if (!HasStateAuthority)
+        {
+            if (_previousHealth != Health || _previousEnergy != Energy || _previousScore != Score)
+            {
+                // Update stored values
+                _previousHealth = Health;
+                _previousEnergy = Energy;
+                _previousScore = Score;
+                
+                // Notify UI
+                OnStatsChanged?.Invoke(this);
             }
         }
         
@@ -396,6 +429,19 @@ public class PlayerState : NetworkBehaviour
         _hand.Add(drawnCard);
     }
 
+    // Add RPC to broadcast stat changes to all clients
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyStatsChanged()
+    {
+        // Update stored values for change detection
+        _previousHealth = Health;
+        _previousEnergy = Energy;
+        _previousScore = Score;
+        
+        // Invoke the event for UI update
+        OnStatsChanged?.Invoke(this);
+    }
+
     public void PlayCard(int cardIndex, Monster target)
     {
         if (!HasStateAuthority || cardIndex < 0 || cardIndex >= _hand.Count) return;
@@ -538,6 +584,44 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
+    public void ModifyHealth(int amount)
+    {
+        if (!HasStateAuthority) return;
+        
+        Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
+        
+        // Broadcast to all clients
+        RPC_NotifyStatsChanged();
+        
+        if (Health <= 0)
+        {
+            GameManager.Instance.LogManager.LogMessage($"{PlayerName} has been defeated!");
+            // Handle player defeat
+        }
+    }
+
+    public void ModifyEnergy(int amount)
+    {
+        if (!HasStateAuthority) return;
+        
+        Energy = Mathf.Clamp(Energy + amount, 0, MaxEnergy);
+        
+        // Broadcast to all clients
+        RPC_NotifyStatsChanged();
+    }
+
+    public void IncreaseScore()
+    {
+        if (!HasStateAuthority) return;
+        
+        Score++;
+        
+        // Broadcast to all clients
+        RPC_NotifyStatsChanged();
+        
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} score increased to {Score}");
+    }
+
     public void SetOpponentMonster(PlayerRef opponentRef, PlayerState opponentState)
     {
         _opponentPlayerRef = opponentRef;
@@ -574,38 +658,6 @@ public class PlayerState : NetworkBehaviour
         return _opponentMonster;
     }
 
-    public void ModifyHealth(int amount)
-    {
-        if (!HasStateAuthority) return;
-        
-        Health = Mathf.Clamp(Health + amount, 0, MaxHealth);
-        OnStatsChanged?.Invoke(this);
-        
-        if (Health <= 0)
-        {
-            GameManager.Instance.LogManager.LogMessage($"{PlayerName} has been defeated!");
-            // Handle player defeat
-        }
-    }
-
-    public void ModifyEnergy(int amount)
-    {
-        if (!HasStateAuthority) return;
-        
-        Energy = Mathf.Clamp(Energy + amount, 0, MaxEnergy);
-        OnStatsChanged?.Invoke(this);
-    }
-
-    public void IncreaseScore()
-    {
-        if (!HasStateAuthority) return;
-        
-        Score++;
-        OnStatsChanged?.Invoke(this);
-        
-        GameManager.Instance.LogManager.LogMessage($"{PlayerName} score increased to {Score}");
-    }
-
     public int GetScore()
     {
         return Score;
@@ -632,7 +684,8 @@ public class PlayerState : NetworkBehaviour
         // Draw new hand
         DrawInitialHand();
         
-        OnStatsChanged?.Invoke(this);
+        // Notify clients about stats changes
+        RPC_NotifyStatsChanged();
         
         GameManager.Instance.LogManager.LogMessage($"{PlayerName} ready for new round");
     }

@@ -26,6 +26,10 @@ public class GameState : NetworkBehaviour
     public static event Action<bool> OnGameActiveChanged;
     public static event Action OnRoundComplete;
     public static event Action OnGameComplete;
+    
+    // Events for player state management
+    public static event Action<PlayerRef, PlayerState> OnPlayerStateAdded;
+    public static event Action<PlayerRef, PlayerState> OnPlayerStateRemoved;
 
     // Track previous values for change detection
     private int _previousTurnPlayerIndex;
@@ -105,6 +109,26 @@ public class GameState : NetworkBehaviour
             
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage($"Player {player} registered with GameState");
+            
+            // Notify listeners that a player state was added
+            OnPlayerStateAdded?.Invoke(player, state);
+        }
+    }
+    
+    // Method to handle player removal more explicitly
+    public void UnregisterPlayer(PlayerRef player)
+    {
+        if (_playerStates.TryGetValue(player, out PlayerState state))
+        {
+            // Notify listeners before removing
+            OnPlayerStateRemoved?.Invoke(player, state);
+            
+            // Remove from collections
+            _playerStates.Remove(player);
+            _turnOrder.Remove(player);
+            
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"Player {player} unregistered from GameState");
         }
     }
 
@@ -145,6 +169,9 @@ public class GameState : NetworkBehaviour
         // Start first turn
         CurrentTurnPlayerIndex = 0;
         OnTurnChanged?.Invoke(CurrentTurnPlayerIndex);
+        
+        // Notify about game active state change
+        OnGameActiveChanged?.Invoke(true);
     }
 
     private void AssignMonsterMatchups()
@@ -236,6 +263,7 @@ public class GameState : NetworkBehaviour
                 
                 // Start draft phase
                 DraftPhaseActive = true;
+                OnDraftPhaseChanged?.Invoke(true);
                 GenerateDraftOptions();
             }
             else
@@ -261,6 +289,7 @@ public class GameState : NetworkBehaviour
                 // Game over, this player won
                 RPC_TriggerGameComplete(playerEntry.Key);
                 GameActive = false;
+                OnGameActiveChanged?.Invoke(false);
                 break;
             }
         }
