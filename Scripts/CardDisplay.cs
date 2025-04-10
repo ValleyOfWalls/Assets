@@ -41,6 +41,12 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             _canvasGroup = gameObject.AddComponent<CanvasGroup>();
         }
     }
+
+    private void Start()
+    {
+        // Make sure all text elements are visible on start
+        ValidateTextElements();
+    }
     
     // Required method to initialize the card for drag operation
     public void InitializeDragOperation(Canvas canvas)
@@ -74,6 +80,66 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
         _titleText = titleText;
         _costText = costText;
         _descriptionText = descriptionText;
+        
+        // Debug log to verify text elements are set
+        if (_titleText == null || _costText == null || _descriptionText == null)
+        {
+            Debug.LogError($"Card {gameObject.name} - Not all text elements were set properly!");
+        }
+        else
+        {
+            Debug.Log($"Card {gameObject.name} - Text elements set successfully.");
+            
+            // Ensure text elements are set up properly
+            if (_titleText != null)
+            {
+                _titleText.fontSize = 16;
+                _titleText.color = Color.white;
+                _titleText.text = "Title"; // Default text to verify visibility
+                _titleText.raycastTarget = false; // Prevent text from blocking input
+            }
+            
+            if (_costText != null)
+            {
+                _costText.fontSize = 20;
+                _costText.color = Color.yellow;
+                _costText.text = "0"; // Default text to verify visibility
+                _costText.raycastTarget = false; // Prevent text from blocking input
+            }
+            
+            if (_descriptionText != null)
+            {
+                _descriptionText.fontSize = 14;
+                _descriptionText.color = Color.white;
+                _descriptionText.text = "Description"; // Default text to verify visibility
+                _descriptionText.raycastTarget = false; // Prevent text from blocking input
+            }
+        }
+    }
+    
+    private void ValidateTextElements()
+    {
+        // Check if the text elements are null and try to recover them from child objects
+        if (_titleText == null)
+        {
+            _titleText = transform.Find("TitleText")?.GetComponent<TMP_Text>();
+            if (_titleText == null)
+                Debug.LogError($"Card {gameObject.name} - Title text component is null!");
+        }
+        
+        if (_costText == null)
+        {
+            _costText = transform.Find("CostText")?.GetComponent<TMP_Text>();
+            if (_costText == null)
+                Debug.LogError($"Card {gameObject.name} - Cost text component is null!");
+        }
+        
+        if (_descriptionText == null)
+        {
+            _descriptionText = transform.Find("DescriptionText")?.GetComponent<TMP_Text>();
+            if (_descriptionText == null)
+                Debug.LogError($"Card {gameObject.name} - Description text component is null!");
+        }
     }
     
     public void SetButton(Button button)
@@ -100,22 +166,40 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     {
         if (_cardData == null) return;
         
+        // Make sure text components are valid
+        ValidateTextElements();
+        
         // Set title
         if (_titleText != null)
         {
             _titleText.text = _cardData.Name;
+            Debug.Log($"Set title text to: {_cardData.Name}");
+        }
+        else
+        {
+            Debug.LogError("Title text component is null when updating visuals!");
         }
         
         // Set cost
         if (_costText != null)
         {
             _costText.text = _cardData.EnergyCost.ToString();
+            Debug.Log($"Set cost text to: {_cardData.EnergyCost}");
+        }
+        else
+        {
+            Debug.LogError("Cost text component is null when updating visuals!");
         }
         
         // Set description
         if (_descriptionText != null)
         {
             _descriptionText.text = _cardData.Description;
+            Debug.Log($"Set description text to: {_cardData.Description}");
+        }
+        else
+        {
+            Debug.LogError("Description text component is null when updating visuals!");
         }
         
         // Set card background color based on type
@@ -138,6 +222,14 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
                     break;
             }
         }
+        
+        // Ensure all text elements are in the foreground
+        if (_titleText != null)
+            _titleText.transform.SetAsLastSibling();
+        if (_costText != null)
+            _costText.transform.SetAsLastSibling();
+        if (_descriptionText != null)
+            _descriptionText.transform.SetAsLastSibling();
         
         // UPDATED: Add visual cue for targeting type
         if (_descriptionText != null)
