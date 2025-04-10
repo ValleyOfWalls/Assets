@@ -31,6 +31,41 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         CreateVisuals();
     }
     
+    // New method: handle resubscribing to events when enabled
+    private void OnEnable()
+    {
+        // When enabled, resubscribe to the monster events if monster exists
+        if (_monster != null)
+        {
+            // Unsubscribe first to avoid duplicate subscriptions
+            _monster.OnHealthChanged -= UpdateHealth;
+            _monster.OnBlockChanged -= UpdateBlock;
+            
+            // Resubscribe
+            _monster.OnHealthChanged += UpdateHealth;
+            _monster.OnBlockChanged += UpdateBlock;
+            
+            // Force update UI with current values
+            UpdateHealth(_monster.Health, _monster.MaxHealth);
+            UpdateBlock(_monster.GetBlock());
+            
+            GameManager.Instance.LogManager.LogMessage($"MonsterDisplay OnEnable: Resubscribed to events for {_monster.Name}");
+        }
+    }
+    
+    // New method: clean up event subscriptions when disabled
+    private void OnDisable()
+    {
+        // Unsubscribe when disabled
+        if (_monster != null)
+        {
+            _monster.OnHealthChanged -= UpdateHealth;
+            _monster.OnBlockChanged -= UpdateBlock;
+            
+            GameManager.Instance.LogManager.LogMessage($"MonsterDisplay OnDisable: Unsubscribed from events for {_monster.Name}");
+        }
+    }
+    
     private void CreateVisuals()
     {
         // Make sure we have an Image component for the background
@@ -275,8 +310,14 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         monster.OnHealthChanged += UpdateHealth;
         monster.OnBlockChanged += UpdateBlock;
         
+        // Force a health update to ensure UI is in sync with monster state
+        UpdateHealth(monster.Health, monster.MaxHealth);
+        
         // Initial block update
         UpdateBlock(monster.GetBlock());
+        
+        // Add debugging log
+        GameManager.Instance.LogManager.LogMessage($"MonsterDisplay set monster: {monster.Name}, Health: {monster.Health}/{monster.MaxHealth}, IsPlayerMonster: {_isPlayerMonster}");
     }
     
     private void UpdateHealth(int health, int maxHealth)
@@ -285,6 +326,7 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         if (_healthText != null)
         {
             _healthText.text = $"HP: {health}/{maxHealth}";
+            GameManager.Instance.LogManager.LogMessage($"MonsterDisplay updated health text to: {_healthText.text} for {(_monster != null ? _monster.Name : "unknown monster")}");
         }
         
         // Update health bar

@@ -414,38 +414,42 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-    // Notify all clients about monster damage
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_NotifyMonsterDamaged(PlayerRef monsterOwner, int newHealth)
+   // In the PlayerState class:
+
+// Notify all clients about monster damage
+[Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+private void RPC_NotifyMonsterDamaged(PlayerRef monsterOwner, int newHealth)
+{
+    var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
+    if (networkRunner == null) return;
+    
+    // We need to identify if this is about the local player's monster or an opponent's monster
+    if (networkRunner.LocalPlayer == monsterOwner)
     {
-        var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
-        if (networkRunner == null) return;
-        
-        // We need to identify if this is about the local player's monster or an opponent's monster
-        if (networkRunner.LocalPlayer == monsterOwner)
+        // This is about our own monster
+        Monster playerMonster = _monsterManager.GetPlayerMonster();
+        if (playerMonster != null)
         {
-            // This is about our own monster
-            Monster playerMonster = _monsterManager.GetPlayerMonster();
-            if (playerMonster != null)
-            {
-                playerMonster.Health = newHealth;
-                GameManager.Instance.LogManager.LogMessage($"Updated our monster's health to {newHealth}");
-            }
+            // Use the new SetHealth method instead of directly modifying health
+            playerMonster.SetHealth(newHealth);
+            GameManager.Instance.LogManager.LogMessage($"Updated our monster's health to {newHealth}");
         }
-        else
-        {
-            // This is about an opponent's monster
-            Monster opponentMonster = _monsterManager.GetOpponentMonster();
-            if (opponentMonster != null)
-            {
-                opponentMonster.Health = newHealth;
-                GameManager.Instance.LogManager.LogMessage($"Updated opponent monster's health to {newHealth}");
-            }
-        }
-        
-        // Notify UI to update
-        OnStatsChanged?.Invoke(this);
     }
+    else
+    {
+        // This is about an opponent's monster
+        Monster opponentMonster = _monsterManager.GetOpponentMonster();
+        if (opponentMonster != null)
+        {
+            // Use the new SetHealth method instead of directly modifying health
+            opponentMonster.SetHealth(newHealth);
+            GameManager.Instance.LogManager.LogMessage($"Updated opponent monster's health to {newHealth}");
+        }
+    }
+    
+    // Notify UI to update
+    OnStatsChanged?.Invoke(this);
+}
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_GrantScoreToAttacker(PlayerRef attackerRef)

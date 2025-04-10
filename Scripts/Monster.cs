@@ -26,6 +26,20 @@ public class Monster
     public event Action<int, int> OnHealthChanged;
     public event Action<int> OnBlockChanged;
     
+    // NEW METHOD: Set health with event triggering
+    public void SetHealth(int newHealth)
+    {
+        if (Health != newHealth)
+        {
+            Health = Mathf.Clamp(newHealth, 0, MaxHealth);
+            OnHealthChanged?.Invoke(Health, MaxHealth);
+            
+            // Log health change
+            if (GameManager.Instance != null)
+                GameManager.Instance.LogManager.LogMessage($"{Name} health set to {Health}/{MaxHealth}");
+        }
+    }
+    
     public void TakeDamage(int amount)
     {
         if (amount <= 0) return;
