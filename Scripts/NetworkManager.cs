@@ -62,75 +62,76 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     }
     
     public async void CreateRoom(string roomName)
+{
+    if (_isConnecting)
     {
-        if (_isConnecting)
-        {
-            GameManager.Instance.LogManager.LogMessage("Already connecting to a room");
-            return;
-        }
-
-        if (string.IsNullOrEmpty(roomName))
-        {
-            roomName = "asd"; // Default to "asd" if empty
-        }
-
-        _currentRoomName = roomName;
-        GameManager.Instance.LogManager.LogMessage($"Creating room: {roomName}");
-        GameManager.Instance.UIManager.UpdateStatus($"Creating room: {roomName}...");
-        _isConnecting = true;
-
-        // Create and join a shared mode session
-        try
-        {
-            // Create session properties to help identify the session
-            Dictionary<string, SessionProperty> customProps = new Dictionary<string, SessionProperty>()
-            {
-                { "CreatedTime", (SessionProperty)DateTime.UtcNow.Ticks },
-                { "GameVersion", (SessionProperty)"1.0" }
-            };
-            
-            var startGameArgs = new StartGameArgs()
-            {
-                GameMode = GameMode.Shared, // THIS IS CRITICAL - use shared mode
-                SessionName = roomName,
-                SessionProperties = customProps,
-                SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>(),
-                PlayerCount = MAX_PLAYERS
-            };
-
-            GameManager.Instance.LogManager.LogMessage($"StartGame Args: GameMode={startGameArgs.GameMode}, SessionName={startGameArgs.SessionName}");
-            
-            var result = await _runner.StartGame(startGameArgs);
-
-            if (result.Ok)
-            {
-                GameManager.Instance.LogManager.LogMessage($"Room created successfully: {roomName}");
-                GameManager.Instance.LogManager.LogMessage($"Local player ID: {_runner.LocalPlayer.PlayerId}");
-                GameManager.Instance.UIManager.UpdateStatus($"Room '{roomName}' created!");
-                
-                // Hide the connection panel
-                GameManager.Instance.UIManager.HideConnectUI();
-                
-                // CRITICAL FIX: Force register local player with lobby
-                GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
-                
-                // Force the player to spawn
-                GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
-            }
-            else
-            {
-                GameManager.Instance.LogManager.LogError($"Failed to create room: {result.ShutdownReason} - {result.ErrorMessage}");
-                GameManager.Instance.UIManager.UpdateStatus($"Failed: {result.ErrorMessage}");
-            }
-        }
-        catch (Exception e)
-        {
-            GameManager.Instance.LogManager.LogError($"Error creating room: {e.Message}");
-            GameManager.Instance.UIManager.UpdateStatus("Error creating room");
-        }
-
-        _isConnecting = false;
+        GameManager.Instance.LogManager.LogMessage("Already connecting to a room");
+        return;
     }
+
+    if (string.IsNullOrEmpty(roomName))
+    {
+        roomName = "asd"; // Default to "asd" if empty
+    }
+
+    _currentRoomName = roomName;
+    GameManager.Instance.LogManager.LogMessage($"Creating room: {roomName}");
+    GameManager.Instance.UIManager.UpdateStatus($"Creating room: {roomName}...");
+    _isConnecting = true;
+
+    // Create and join a shared mode session
+    try
+    {
+        // Create session properties to help identify the session
+        Dictionary<string, SessionProperty> customProps = new Dictionary<string, SessionProperty>()
+        {
+            { "CreatedTime", (SessionProperty)DateTime.UtcNow.Ticks },
+            { "GameVersion", (SessionProperty)"1.0" }
+        };
+        
+        var startGameArgs = new StartGameArgs()
+        {
+            GameMode = GameMode.Shared, // THIS IS CRITICAL - use shared mode
+            SessionName = roomName,
+            SessionProperties = customProps,
+            SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>(),
+            PlayerCount = MAX_PLAYERS
+        };
+
+        GameManager.Instance.LogManager.LogMessage($"StartGame Args: GameMode={startGameArgs.GameMode}, SessionName={startGameArgs.SessionName}");
+        
+        var result = await _runner.StartGame(startGameArgs);
+
+        if (result.Ok)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Room created successfully: {roomName}");
+            GameManager.Instance.LogManager.LogMessage($"Local player ID: {_runner.LocalPlayer.PlayerId}");
+            GameManager.Instance.UIManager.UpdateStatus($"Room '{roomName}' created!");
+            
+            // Hide the connection panel
+            GameManager.Instance.UIManager.HideConnectUI();
+            
+            // CRITICAL FIX: Force register local player with lobby
+            GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
+            
+            // Force the player to spawn
+            GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogError($"Failed to create room: {result.ShutdownReason} - {result.ErrorMessage}");
+            GameManager.Instance.UIManager.UpdateStatus($"Failed: {result.ErrorMessage}");
+        }
+    }
+    catch (Exception e)
+    {
+        GameManager.Instance.LogManager.LogError($"Error creating room: {e.Message}");
+        GameManager.Instance.UIManager.UpdateStatus("Error creating room");
+    }
+
+    _isConnecting = false;
+}
+
 
     public async void JoinRoom(string roomName)
     {

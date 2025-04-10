@@ -2,6 +2,7 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections.Generic;
+using Fusion;
 
 public class UIManager : MonoBehaviour
 {
@@ -24,6 +25,9 @@ public class UIManager : MonoBehaviour
     // Game started UI
     private GameObject _gameStartedPanel;
     private TMP_Text _gameStartedText;
+    
+// Track if player spawning is complete
+    private bool _localPlayerSpawned = false;
     
     // Player name tracking
     private string _localPlayerName = "";
@@ -48,8 +52,31 @@ public class UIManager : MonoBehaviour
         GameManager.Instance.LobbyManager.OnPlayerReadyStatusChanged += HandlePlayerReadyStatusChanged;
         GameManager.Instance.LobbyManager.OnGameStarted += HandleGameStarted;
         
+        // NEW: Subscribe to player spawned event
+        GameManager.Instance.PlayerManager.OnPlayerSpawned += HandlePlayerSpawned;
+        
         GameManager.Instance.LogManager.LogMessage("UIManager initialization complete");
     }
+
+private void HandlePlayerSpawned(PlayerRef playerRef, Player player)
+    {
+        var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
+        if (networkRunner != null && playerRef == networkRunner.LocalPlayer)
+        {
+            _localPlayerSpawned = true;
+            GameManager.Instance.LogManager.LogMessage($"Local player {player.GetPlayerName()} spawned and ready for UI interactions");
+            
+            // Make sure Ready button is interactable
+            if (_readyButton != null)
+            {
+                _readyButton.interactable = true;
+            }
+            
+            // Update player list with latest information
+            UpdatePlayersList();
+        }
+    }
+
     
     private void CreateUI()
     {
@@ -488,6 +515,9 @@ public class UIManager : MonoBehaviour
         
         if (_readyButton != null)
         {
+            // Initially disable until player is spawned
+            _readyButton.interactable = false;
+            
             _readyButton.onClick.RemoveAllListeners();
             _readyButton.onClick.AddListener(() => {
                 SetLocalPlayerReady();
@@ -496,6 +526,7 @@ public class UIManager : MonoBehaviour
         
         GameManager.Instance.LogManager.LogMessage("UI listeners set up");
     }
+
     
     private void SaveLocalPlayerName()
     {
@@ -513,6 +544,12 @@ public class UIManager : MonoBehaviour
     
     private void SetLocalPlayerReady()
     {
+        if (!_localPlayerSpawned)
+        {
+            GameManager.Instance.LogManager.LogMessage("Cannot set ready status: Local player not yet spawned");
+            return;
+        }
+        
         // Find local player object
         Player localPlayer = FindLocalPlayer();
         if (localPlayer != null)
@@ -569,44 +606,52 @@ public class UIManager : MonoBehaviour
         }
         else
         {
-            GameManager.Instance.LogManager.LogMessage("Could not find local player");
+            GameManager.Instance.LogManager.LogError("Could not find local player in SetLocalPlayerReady");
         }
     }
+
     
     private Player FindLocalPlayer()
-{
-    var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
-    if (networkRunner != null)
     {
-        var localPlayerRef = networkRunner.LocalPlayer;
-        
-        // Try to get from PlayerManager first
-        var playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(localPlayerRef);
-        if (playerObject != null)
+        if (!_localPlayerSpawned)
         {
-            Player playerComponent = playerObject.GetComponent<Player>();
-            if (playerComponent != null)
-            {
-                GameManager.Instance.LogManager.LogMessage($"Found local player via PlayerManager: {playerComponent.GetPlayerName()}");
-                return playerComponent;
-            }
+            GameManager.Instance.LogManager.LogMessage("Local player not yet spawned");
+            return null;
         }
         
-        // If not found, try to find any Player component with input authority
-        Player[] allPlayers = FindObjectsOfType<Player>();
-        foreach (Player player in allPlayers)
+        var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
+        if (networkRunner != null)
         {
-            if (player.Object != null && player.Object.HasInputAuthority)
+            var localPlayerRef = networkRunner.LocalPlayer;
+            
+            // Try to get from PlayerManager first
+            var playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(localPlayerRef);
+            if (playerObject != null)
             {
-                GameManager.Instance.LogManager.LogMessage($"Found local player via FindObjectsOfType: {player.GetPlayerName()}");
-                return player;
+                Player playerComponent = playerObject.GetComponent<Player>();
+                if (playerComponent != null)
+                {
+                    GameManager.Instance.LogManager.LogMessage($"Found local player via PlayerManager: {playerComponent.GetPlayerName()}");
+                    return playerComponent;
+                }
+            }
+            
+            // If not found, try to find any Player component with input authority
+            Player[] allPlayers = FindObjectsOfType<Player>();
+            foreach (Player player in allPlayers)
+            {
+                if (player.Object != null && player.Object.HasInputAuthority)
+                {
+                    GameManager.Instance.LogManager.LogMessage($"Found local player via FindObjectsOfType: {player.GetPlayerName()}");
+                    return player;
+                }
             }
         }
         
         GameManager.Instance.LogManager.LogMessage("Could not find local player");
+        return null;
     }
-    return null;
-}
+
 
     // Implement common UI actions
     public void ShowConnectUI()
@@ -893,12 +938,21 @@ public class UIManager : MonoBehaviour
     private void OnDestroy()
     {
         // Unsubscribe from events to prevent memory leaks
-        if (GameManager.Instance != null && GameManager.Instance.LobbyManager != null)
+        if (GameManager.Instance != null)
         {
-            GameManager.Instance.LobbyManager.OnAllPlayersReady -= HandleAllPlayersReady;
-            GameManager.Instance.LobbyManager.OnCountdownComplete -= HandleCountdownComplete;
-            GameManager.Instance.LobbyManager.OnPlayerReadyStatusChanged -= HandlePlayerReadyStatusChanged;
-            GameManager.Instance.LobbyManager.OnGameStarted -= HandleGameStarted;
+            if (GameManager.Instance.LobbyManager != null)
+            {
+                GameManager.Instance.LobbyManager.OnAllPlayersReady -= HandleAllPlayersReady;
+                GameManager.Instance.LobbyManager.OnCountdownComplete -= HandleCountdownComplete;
+                GameManager.Instance.LobbyManager.OnPlayerReadyStatusChanged -= HandlePlayerReadyStatusChanged;
+                GameManager.Instance.LobbyManager.OnGameStarted -= HandleGameStarted;
+            }
+            
+            if (GameManager.Instance.PlayerManager != null)
+            {
+                GameManager.Instance.PlayerManager.OnPlayerSpawned -= HandlePlayerSpawned;
+            }
         }
     }
+
 }

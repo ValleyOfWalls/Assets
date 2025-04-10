@@ -254,10 +254,40 @@ public class Player : NetworkBehaviour
                 if (GameManager.Instance != null && GameManager.Instance.LogManager != null)
                     GameManager.Instance.LogManager.LogMessage($"Sent RPC to register player: {playerName}");
             }
+            
+            // Explicitly wait one frame then notify about spawning
+            StartCoroutine(NotifyPlayerSpawnComplete());
         }
         
         Debug.Log($"Player spawned with ID: {Object.Id} and name: {PlayerName}");
     }
+
+    private System.Collections.IEnumerator NotifyPlayerSpawnComplete()
+    {
+        // Wait one frame to ensure everything is set up
+        yield return null;
+        
+        // Notify PlayerManager that this player is fully ready
+        if (GameManager.Instance != null && GameManager.Instance.PlayerManager != null)
+        {
+            // Find the matching PlayerRef
+            var playerRef = Object.InputAuthority;
+            GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} spawn complete, notifying listeners.");
+            
+            // Invoke the event through PlayerManager
+            var eventField = typeof(PlayerManager).GetField("OnPlayerSpawned", 
+                                System.Reflection.BindingFlags.Instance | 
+                                System.Reflection.BindingFlags.Public);
+            
+            if (eventField != null)
+            {
+                var onPlayerSpawned = eventField.GetValue(GameManager.Instance.PlayerManager) as System.Action<PlayerRef, Player>;
+                onPlayerSpawned?.Invoke(playerRef, this);
+            }
+        }
+    }
+
+
     
     private void PositionPlayerInUniqueSpace()
     {
