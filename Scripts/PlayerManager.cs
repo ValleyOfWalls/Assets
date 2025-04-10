@@ -1,6 +1,5 @@
 using Fusion;
 using System;
-using System.Collections; // Added for Coroutines
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -8,9 +7,6 @@ public class PlayerManager : MonoBehaviour
 {
     [SerializeField] private NetworkObject _playerPrefab;
     private Dictionary<PlayerRef, NetworkObject> _players = new Dictionary<PlayerRef, NetworkObject>();
-    
-    // Event fired when player is spawned and ready
-    public event Action<PlayerRef, Player> OnPlayerSpawned;
     
     public void Initialize()
     {
@@ -26,105 +22,151 @@ public class PlayerManager : MonoBehaviour
                 GameManager.Instance.LogManager.LogMessage("PlayerPrefab loaded from Resources folder");
         }
     }
-
-    // This method now just starts the coroutine
+    
+    // Only spawns the local player
     public void OnLocalPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
-        GameManager.Instance.LogManager.LogMessage($"OnLocalPlayerJoined called for {player}. Starting spawn coroutine.");
-        StartCoroutine(SpawnPlayerAfterDelay(runner, player));
-    }
-
-    // Coroutine to handle the actual spawning after a delay
-    private IEnumerator SpawnPlayerAfterDelay(NetworkRunner runner, PlayerRef player)
-    {
-        GameManager.Instance.LogManager.LogMessage($"SpawnPlayerAfterDelay coroutine started for {player}. Waiting one frame...");
-        yield return null; // Wait for one frame
-
-        GameManager.Instance.LogManager.LogMessage($"SpawnPlayerAfterDelay continuing for {player} after delay.");
-        try
+        try 
         {
             // Only the local player should spawn their own character
             if (_players.ContainsKey(player))
             {
                 GameManager.Instance.LogManager.LogMessage($"Player {player} is already spawned");
-                
-                // Notify UI if player is already spawned but UI hasn't been updated
-                Player playerComponent = _players[player].GetComponent<Player>();
-                if (playerComponent != null)
-                 {
-                     OnPlayerSpawned?.Invoke(player, playerComponent);
-                 }
-                 yield break;
-             }
-             
+                return;
+            }
+            
             GameManager.Instance.LogManager.LogMessage($"Local player {player} joined - spawning player");
             
             if (_playerPrefab == null)
             {
-                // Try to load the prefab if it's not assigned
-                _playerPrefab = Resources.Load<NetworkObject>("PlayerPrefab");
-                
-                if (_playerPrefab == null)
-                 {
-                     GameManager.Instance.LogManager.LogError("Player prefab is missing! Make sure to create the PlayerPrefab in Resources folder.");
-                     yield break;
-                 }
-             }
+                GameManager.Instance.LogManager.LogError("Player prefab is missing! Make sure to create the PlayerPrefab in Resources folder.");
+                return;
+            }
             
             // Get player name from UI
             string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
             
-            // Position the player with a unique position
+            // Check if this player is rejoining
+            bool isRejoining = !string.IsNullOrEmpty(playerName) && 
+                               GameManager.Instance.LobbyManager.CheckIsRejoining(playerName);
+            
+            // Position the player with a unique position based on player ID to avoid spawn collisions
             Vector2 spawnPosition = new Vector2(
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId, 
                 UnityEngine.Random.Range(-5, 5) + player.PlayerId
             );
             
-            GameManager.Instance.LogManager.LogMessage($"Spawning player with Game Mode: {runner.GameMode}");
+            // Spawn the player for everyone in the session
+            NetworkObject playerObject = runner.Spawn(_playerPrefab, position: spawnPosition, inputAuthority: player);
             
-            GameManager.Instance.LogManager.LogMessage($"Attempting SpawnAsync for player {player}..."); // <-- ADDED LOG
-            // Use SpawnAsync, and handle the callback properly
-            runner.SpawnAsync(_playerPrefab, spawnPosition, Quaternion.identity, player, 
-                (runner, playerObject) => {
-                    GameManager.Instance.LogManager.LogMessage($"SpawnAsync callback entered for player {player}. PlayerObject is null: {playerObject == null}"); // <-- ADDED LOG
-                    // This callback is executed when the spawn succeeds
-                    if (playerObject != null)
+            // Keep track of spawned objects
+            if (playerObject != null)
+            {
+                _players[player] = playerObject;
+                
+                // Initialize player name
+                Player playerComponent = playerObject.GetComponent<Player>();
+                if (playerComponent != null)
+                {
+                    // Set player name before any RPC calls
+                    playerComponent.SetPlayerName(playerName);
+                    
+                    if (isRejoining)
                     {
-                        // Store the player object
-                        _players[player] = playerObject;
-                        
-                        // Initialize player name
-                        Player playerComponent = playerObject.GetComponent<Player>();
-                        if (playerComponent != null)
-                        {
-                            playerComponent.SetPlayerName(playerName);
-                            
-                            // Register with lobby manager
-                            GameManager.Instance.LogManager.LogMessage($"Player {playerName} spawned successfully with object ID: {playerObject.Id}");
-                            
-                            // Notify listeners that player is ready
-                            OnPlayerSpawned?.Invoke(player, playerComponent);
-                        }
-                        else
-                        {
-                            GameManager.Instance.LogManager.LogError("Player component not found on spawned object!");
-                        }
-                        
-                        // Create camera for the local player
-                        GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
+                        GameManager.Instance.LogManager.LogMessage($"Player {playerName} is rejoining the game");
+                        GameManager.Instance.UIManager.UpdateStatus($"Rejoined as {playerName}");
                     }
                     else
                     {
-                        GameManager.Instance.LogManager.LogError($"Player object failed to spawn! SpawnAsync returned null for player {player}."); // <-- ADDED LOG
+                        GameManager.Instance.LogManager.LogMessage($"Player {playerName} joined the game");
+                        GameManager.Instance.UIManager.UpdateStatus($"You joined as {playerName}");
                     }
-                });
+                }
+                
+                GameManager.Instance.LogManager.LogMessage($"Local player {player} spawned successfully with object ID: {playerObject.Id}");
+                
+                // Explicitly ensure this player is registered in the lobby
+                if (!string.IsNullOrEmpty(playerName))
+                {
+                    // This direct call helps ensure registration happens
+                    GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
+                    GameManager.Instance.LogManager.LogMessage($"Directly registering player {playerName} with lobby manager");
+                }
+                
+                // Spawn the player state for this player
+                SpawnPlayerState(runner, player, playerObject);
+                
+                // Create camera for the local player
+                GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
+                GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogError("Failed to spawn player object!");
+            }
+            
+            // Log the total number of players in the session
+            GameManager.Instance.LogManager.LogMessage($"Total players in session: {_players.Count}");
+        }
+        catch (Exception ex) 
+        {
+            GameManager.Instance.LogManager.LogError($"Error in OnLocalPlayerJoined: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+    
+    // New method to spawn player state
+    private void SpawnPlayerState(NetworkRunner runner, PlayerRef playerRef, NetworkObject playerObject)
+    {
+        try
+        {
+            // Load the PlayerState prefab
+            NetworkObject playerStatePrefab = Resources.Load<NetworkObject>("PlayerStatePrefab");
+            
+            if (playerStatePrefab == null)
+            {
+                GameManager.Instance.LogManager.LogError("PlayerStatePrefab not found! Please create it and place it in a Resources folder.");
+                return;
+            }
+            
+            // Spawn the PlayerState for this player
+            NetworkObject stateObj = runner.Spawn(playerStatePrefab, inputAuthority: playerRef);
+            
+            if (stateObj != null)
+            {
+                // Get the PlayerState component
+                PlayerState playerState = stateObj.GetComponent<PlayerState>();
+                
+                if (playerState != null)
+                {
+                    // Link player component and player state
+                    Player playerComponent = playerObject.GetComponent<Player>();
+                    if (playerComponent != null)
+                    {
+                        GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for player {playerRef.PlayerId}");
+                    }
+                }
+                else
+                {
+                    GameManager.Instance.LogManager.LogError("PlayerState component not found on spawned object!");
+                }
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogError("Failed to spawn PlayerState object!");
+            }
         }
         catch (Exception ex)
         {
-            GameManager.Instance.LogManager.LogError($"Error in SpawnPlayerAfterDelay: {ex.Message}\n{ex.StackTrace}");
+            GameManager.Instance.LogManager.LogError($"Error spawning PlayerState: {ex.Message}\n{ex.StackTrace}");
         }
     }
-
+    
+    // Just track remote players that joined (their clients will spawn their characters)
+    public void OnRemotePlayerJoined(NetworkRunner runner, PlayerRef player)
+    {
+        GameManager.Instance.LogManager.LogMessage($"Remote player {player} joined - waiting for their character to spawn");
+    }
+    
     // Called when a network player object spawns
     public void OnPlayerObjectSpawned(NetworkRunner runner, NetworkObject playerObject, PlayerRef player)
     {
@@ -144,19 +186,11 @@ public class PlayerManager : MonoBehaviour
                     GameManager.Instance.LogManager.LogMessage($"Ensuring player {playerName} is in lobby manager");
                     GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
                     
-                    // Notify UI
-                    OnPlayerSpawned?.Invoke(player, playerComponent);
-                    
                     // Update UI
                     GameManager.Instance.UIManager.UpdatePlayersList();
                 }
             }
         }
-    }
-    
-    public void OnRemotePlayerJoined(NetworkRunner runner, PlayerRef player)
-    {
-        GameManager.Instance.LogManager.LogMessage($"Remote player {player} joined - waiting for their character to spawn");
     }
     
     public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
@@ -245,8 +279,6 @@ public class PlayerManager : MonoBehaviour
     {
         foreach (var playerObj in _players.Values)
         {
-            if (playerObj == null) continue;
-            
             Player player = playerObj.GetComponent<Player>();
             if (player != null && player.GetPlayerName() == playerName)
             {

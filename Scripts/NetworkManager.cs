@@ -62,76 +62,69 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
     }
     
     public async void CreateRoom(string roomName)
-{
-    if (_isConnecting)
     {
-        GameManager.Instance.LogManager.LogMessage("Already connecting to a room");
-        return;
-    }
-
-    if (string.IsNullOrEmpty(roomName))
-    {
-        roomName = "asd"; // Default to "asd" if empty
-    }
-
-    _currentRoomName = roomName;
-    GameManager.Instance.LogManager.LogMessage($"Creating room: {roomName}");
-    GameManager.Instance.UIManager.UpdateStatus($"Creating room: {roomName}...");
-    _isConnecting = true;
-
-    // Create and join a shared mode session
-    try
-    {
-        // Create session properties to help identify the session
-        Dictionary<string, SessionProperty> customProps = new Dictionary<string, SessionProperty>()
+        if (_isConnecting)
         {
-            { "CreatedTime", (SessionProperty)DateTime.UtcNow.Ticks },
-            { "GameVersion", (SessionProperty)"1.0" }
-        };
-        
-        var startGameArgs = new StartGameArgs()
-        {
-            GameMode = GameMode.Shared, // THIS IS CRITICAL - use shared mode
-            SessionName = roomName,
-            SessionProperties = customProps,
-            SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>(),
-            PlayerCount = MAX_PLAYERS
-        };
-
-        GameManager.Instance.LogManager.LogMessage($"StartGame Args: GameMode={startGameArgs.GameMode}, SessionName={startGameArgs.SessionName}");
-        
-        var result = await _runner.StartGame(startGameArgs);
-
-        if (result.Ok)
-        {
-            GameManager.Instance.LogManager.LogMessage($"Room created successfully: {roomName}");
-            GameManager.Instance.LogManager.LogMessage($"Local player ID: {_runner.LocalPlayer.PlayerId}");
-            GameManager.Instance.UIManager.UpdateStatus($"Room '{roomName}' created!");
-            
-            // Hide the connection panel
-            GameManager.Instance.UIManager.HideConnectUI();
-            
-            // CRITICAL FIX: Force register local player with lobby
-            GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
-            
-            // Spawning is now handled in OnPlayerJoined callback
-            // GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer); 
+            GameManager.Instance.LogManager.LogMessage("Already connecting to a room");
+            return;
         }
-        else
+
+        if (string.IsNullOrEmpty(roomName))
         {
-            GameManager.Instance.LogManager.LogError($"Failed to create room: {result.ShutdownReason} - {result.ErrorMessage}");
-            GameManager.Instance.UIManager.UpdateStatus($"Failed: {result.ErrorMessage}");
+            roomName = "asd"; // Default to "asd" if empty
         }
-    }
-    catch (Exception e)
-    {
-        GameManager.Instance.LogManager.LogError($"Error creating room: {e.Message}");
-        GameManager.Instance.UIManager.UpdateStatus("Error creating room");
-    }
 
-    _isConnecting = false;
-}
+        _currentRoomName = roomName;
+        GameManager.Instance.LogManager.LogMessage($"Creating room: {roomName}");
+        GameManager.Instance.UIManager.UpdateStatus($"Creating room: {roomName}...");
+        _isConnecting = true;
 
+        // Create and join a shared mode session
+        try
+        {
+            // Create session properties to help identify the session
+            Dictionary<string, SessionProperty> customProps = new Dictionary<string, SessionProperty>()
+            {
+                { "CreatedTime", (SessionProperty)DateTime.UtcNow.Ticks },
+                { "GameVersion", (SessionProperty)"1.0" }
+            };
+            
+            var startGameArgs = new StartGameArgs()
+            {
+                GameMode = GameMode.Shared, // THIS IS CRITICAL - use shared mode
+                SessionName = roomName,
+                SessionProperties = customProps,
+                SceneManager = _runner.GetComponent<NetworkSceneManagerDefault>(),
+                PlayerCount = MAX_PLAYERS
+            };
+
+            GameManager.Instance.LogManager.LogMessage($"StartGame Args: GameMode={startGameArgs.GameMode}, SessionName={startGameArgs.SessionName}");
+            
+            var result = await _runner.StartGame(startGameArgs);
+
+            if (result.Ok)
+            {
+                GameManager.Instance.LogManager.LogMessage($"Room created successfully: {roomName}");
+                GameManager.Instance.LogManager.LogMessage($"Local player ID: {_runner.LocalPlayer.PlayerId}");
+                GameManager.Instance.UIManager.UpdateStatus($"Room '{roomName}' created!");
+                
+                // Hide the connection panel
+                GameManager.Instance.UIManager.HideConnectUI();
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogError($"Failed to create room: {result.ShutdownReason} - {result.ErrorMessage}");
+                GameManager.Instance.UIManager.UpdateStatus($"Failed: {result.ErrorMessage}");
+            }
+        }
+        catch (Exception e)
+        {
+            GameManager.Instance.LogManager.LogError($"Error creating room: {e.Message}");
+            GameManager.Instance.UIManager.UpdateStatus("Error creating room");
+        }
+
+        _isConnecting = false;
+    }
 
     public async void JoinRoom(string roomName)
     {
@@ -174,12 +167,6 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
                 
                 // Hide the connection panel
                 GameManager.Instance.UIManager.HideConnectUI();
-                
-                // CRITICAL FIX: Force register local player with lobby
-                GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
-                
-                // Spawning is now handled in OnPlayerJoined callback
-                // GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
             }
             else
             {
@@ -207,44 +194,25 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         return GameManager.Instance.LobbyManager.IsPlayerRegistered(playerName);
     }
 
-public bool IsPlayerSpawned(PlayerRef playerRef)
-{
-    return GameManager.Instance.PlayerManager.GetPlayerObject(playerRef) != null;
-}
-
     #region INetworkRunnerCallbacks Implementation
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
-        GameManager.Instance.LogManager.LogMessage($"Player {player} joined the network (Is Local: {player == runner.LocalPlayer})");
+        GameManager.Instance.LogManager.LogMessage($"Player {player} joined the network");
         
         // Update all clients about the player count
         string playerCountMessage = $"Players in room: {runner.ActivePlayers.Count()}";
         GameManager.Instance.LogManager.LogMessage(playerCountMessage);
         
-        // CRITICAL FIX FOR MULTIPLE PEER MODE:
         // Call player manager to handle the new player
         if (player == runner.LocalPlayer)
         {
             // Only spawn our own player object
-            GameManager.Instance.LogManager.LogMessage($"Spawning local player {player}");
             GameManager.Instance.PlayerManager.OnLocalPlayerJoined(runner, player);
-            
-            // Also directly register with lobby for multiple peer mode
-            string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
-            if (!string.IsNullOrEmpty(playerName))
-            {
-                GameManager.Instance.LogManager.LogMessage($"Force-registering local player {playerName} with lobby");
-                GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
-                
-                // Force update the UI
-                GameManager.Instance.UIManager.UpdatePlayersList();
-            }
         }
         else
         {
             // Just track remote players
-            GameManager.Instance.LogManager.LogMessage($"Tracking remote player {player}");
             GameManager.Instance.PlayerManager.OnRemotePlayerJoined(runner, player);
         }
     }
