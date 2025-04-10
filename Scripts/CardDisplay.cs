@@ -292,8 +292,8 @@ public class CardDisplay : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     // NEW: Reset all highlights
     private void ResetAllMonsterHighlights()
     {
-        // Find all monster displays and reset their highlights
-        MonsterDisplay[] allDisplays = FindObjectsOfType<MonsterDisplay>();
+        // Using FindObjectsByType with FindObjectsSortMode.None which is faster
+        MonsterDisplay[] allDisplays = UnityEngine.Object.FindObjectsByType<MonsterDisplay>(FindObjectsSortMode.None);
         foreach (var display in allDisplays)
         {
             display.ShowHighlight(false);
