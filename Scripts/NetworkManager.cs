@@ -114,8 +114,8 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
             // CRITICAL FIX: Force register local player with lobby
             GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
             
-            // Force the player to spawn
-            GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
+            // Spawning is now handled in OnPlayerJoined callback
+            // GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer); 
         }
         else
         {
@@ -178,8 +178,8 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
                 // CRITICAL FIX: Force register local player with lobby
                 GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
                 
-                // Force the player to spawn
-                GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
+                // Spawning is now handled in OnPlayerJoined callback
+                // GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
             }
             else
             {

@@ -1,5 +1,6 @@
 using Fusion;
 using System;
+using System.Collections; // Added for Coroutines
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -25,10 +26,22 @@ public class PlayerManager : MonoBehaviour
                 GameManager.Instance.LogManager.LogMessage("PlayerPrefab loaded from Resources folder");
         }
     }
-    
+
+    // This method now just starts the coroutine
     public void OnLocalPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
-        try 
+        GameManager.Instance.LogManager.LogMessage($"OnLocalPlayerJoined called for {player}. Starting spawn coroutine.");
+        StartCoroutine(SpawnPlayerAfterDelay(runner, player));
+    }
+
+    // Coroutine to handle the actual spawning after a delay
+    private IEnumerator SpawnPlayerAfterDelay(NetworkRunner runner, PlayerRef player)
+    {
+        GameManager.Instance.LogManager.LogMessage($"SpawnPlayerAfterDelay coroutine started for {player}. Waiting one frame...");
+        yield return null; // Wait for one frame
+
+        GameManager.Instance.LogManager.LogMessage($"SpawnPlayerAfterDelay continuing for {player} after delay.");
+        try
         {
             // Only the local player should spawn their own character
             if (_players.ContainsKey(player))
@@ -38,12 +51,12 @@ public class PlayerManager : MonoBehaviour
                 // Notify UI if player is already spawned but UI hasn't been updated
                 Player playerComponent = _players[player].GetComponent<Player>();
                 if (playerComponent != null)
-                {
-                    OnPlayerSpawned?.Invoke(player, playerComponent);
-                }
-                return;
-            }
-            
+                 {
+                     OnPlayerSpawned?.Invoke(player, playerComponent);
+                 }
+                 yield break;
+             }
+             
             GameManager.Instance.LogManager.LogMessage($"Local player {player} joined - spawning player");
             
             if (_playerPrefab == null)
@@ -52,11 +65,11 @@ public class PlayerManager : MonoBehaviour
                 _playerPrefab = Resources.Load<NetworkObject>("PlayerPrefab");
                 
                 if (_playerPrefab == null)
-                {
-                    GameManager.Instance.LogManager.LogError("Player prefab is missing! Make sure to create the PlayerPrefab in Resources folder.");
-                    return;
-                }
-            }
+                 {
+                     GameManager.Instance.LogManager.LogError("Player prefab is missing! Make sure to create the PlayerPrefab in Resources folder.");
+                     yield break;
+                 }
+             }
             
             // Get player name from UI
             string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
@@ -69,9 +82,11 @@ public class PlayerManager : MonoBehaviour
             
             GameManager.Instance.LogManager.LogMessage($"Spawning player with Game Mode: {runner.GameMode}");
             
+            GameManager.Instance.LogManager.LogMessage($"Attempting SpawnAsync for player {player}..."); // <-- ADDED LOG
             // Use SpawnAsync, and handle the callback properly
             runner.SpawnAsync(_playerPrefab, spawnPosition, Quaternion.identity, player, 
                 (runner, playerObject) => {
+                    GameManager.Instance.LogManager.LogMessage($"SpawnAsync callback entered for player {player}. PlayerObject is null: {playerObject == null}"); // <-- ADDED LOG
                     // This callback is executed when the spawn succeeds
                     if (playerObject != null)
                     {
@@ -100,16 +115,16 @@ public class PlayerManager : MonoBehaviour
                     }
                     else
                     {
-                        GameManager.Instance.LogManager.LogError("Player object failed to spawn!");
+                        GameManager.Instance.LogManager.LogError($"Player object failed to spawn! SpawnAsync returned null for player {player}."); // <-- ADDED LOG
                     }
                 });
         }
-        catch (Exception ex) 
+        catch (Exception ex)
         {
-            GameManager.Instance.LogManager.LogError($"Error in OnLocalPlayerJoined: {ex.Message}\n{ex.StackTrace}");
+            GameManager.Instance.LogManager.LogError($"Error in SpawnPlayerAfterDelay: {ex.Message}\n{ex.StackTrace}");
         }
     }
-    
+
     // Called when a network player object spawns
     public void OnPlayerObjectSpawned(NetworkRunner runner, NetworkObject playerObject, PlayerRef player)
     {
