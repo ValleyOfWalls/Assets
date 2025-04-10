@@ -206,6 +206,11 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         return GameManager.Instance.LobbyManager.IsPlayerRegistered(playerName);
     }
 
+public bool IsPlayerSpawned(PlayerRef playerRef)
+{
+    return GameManager.Instance.PlayerManager.GetPlayerObject(playerRef) != null;
+}
+
     #region INetworkRunnerCallbacks Implementation
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)

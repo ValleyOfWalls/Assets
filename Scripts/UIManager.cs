@@ -574,19 +574,39 @@ public class UIManager : MonoBehaviour
     }
     
     private Player FindLocalPlayer()
+{
+    var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
+    if (networkRunner != null)
     {
-        var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
-        if (networkRunner != null)
+        var localPlayerRef = networkRunner.LocalPlayer;
+        
+        // Try to get from PlayerManager first
+        var playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(localPlayerRef);
+        if (playerObject != null)
         {
-            var localPlayerRef = networkRunner.LocalPlayer;
-            var playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(localPlayerRef);
-            if (playerObject != null)
+            Player playerComponent = playerObject.GetComponent<Player>();
+            if (playerComponent != null)
             {
-                return playerObject.GetComponent<Player>();
+                GameManager.Instance.LogManager.LogMessage($"Found local player via PlayerManager: {playerComponent.GetPlayerName()}");
+                return playerComponent;
             }
         }
-        return null;
+        
+        // If not found, try to find any Player component with input authority
+        Player[] allPlayers = FindObjectsOfType<Player>();
+        foreach (Player player in allPlayers)
+        {
+            if (player.Object != null && player.Object.HasInputAuthority)
+            {
+                GameManager.Instance.LogManager.LogMessage($"Found local player via FindObjectsOfType: {player.GetPlayerName()}");
+                return player;
+            }
+        }
+        
+        GameManager.Instance.LogManager.LogMessage("Could not find local player");
     }
+    return null;
+}
 
     // Implement common UI actions
     public void ShowConnectUI()
