@@ -731,67 +731,81 @@ public class PlayerState : NetworkBehaviour
     }
 
     // NEW: RPC to request damage to another player's monster instead of directly applying it
-    [Rpc(RpcSources.All, RpcTargets.All)]
-    private void RPC_RequestDamageToMonster(PlayerRef targetPlayer, int damageAmount)
+[Rpc(RpcSources.All, RpcTargets.All)]
+private void RPC_RequestDamageToMonster(PlayerRef targetPlayer, int damageAmount)
+{
+    // Enhanced logging for debugging
+    GameManager.Instance.LogManager.LogMessage($"RPC_RequestDamageToMonster received: target={targetPlayer}, damage={damageAmount}");
+    GameManager.Instance.LogManager.LogMessage($"Current player refs - InputAuth: {Object.InputAuthority}, HasStateAuth={HasStateAuthority}");
+    
+    var networkRunner = GameManager.Instance.NetworkManager.GetRunner();
+    
+    // FIXED: Simplify the ownership check to match the targetPlayer with input authority
+    bool isOurMonster = false;
+    
+    // Are we the target player?
+    if (networkRunner != null && networkRunner.LocalPlayer == targetPlayer)
     {
-        GameManager.Instance.LogManager.LogMessage($"RPC_RequestDamageToMonster received: target={targetPlayer}, damage={damageAmount}, InputAuth={Object.InputAuthority}, HasStateAuth={HasStateAuthority}");
+        isOurMonster = true;
+        GameManager.Instance.LogManager.LogMessage("This is our monster (LocalPlayer match)");
+    }
+    
+    GameManager.Instance.LogManager.LogMessage($"Monster ownership determined: {isOurMonster}");
+    
+    // Only proceed if this is our monster
+    if (isOurMonster)
+    {
+        GameManager.Instance.LogManager.LogMessage($"Processing damage to our monster");
         
-        // Log all current state for debugging
-        GameManager.Instance.LogManager.LogMessage($"Local monster state: {(_playerMonster != null ? _playerMonster.Health : -1)}/{(_playerMonster != null ? _playerMonster.MaxHealth : -1)}");
-        GameManager.Instance.LogManager.LogMessage($"Networked monster state: {MonsterHealth}/{MonsterMaxHealth}");
-        
-        // MODIFIED: Simplified check - if we receive damage request for our monster, process it
-        if (Object.InputAuthority == targetPlayer) // This is our monster
+        if (_playerMonster != null)
         {
-            GameManager.Instance.LogManager.LogMessage($"Processing damage to our monster as owner (InputAuth match)");
+            // Log the monster's current state
+            int healthBefore = _playerMonster.Health;
             
-            if (_playerMonster != null)
+            // Apply the damage to our monster
+            _playerMonster.TakeDamage(damageAmount);
+            
+            // Log the monster's new state
+            int newHealth = _playerMonster.Health;
+            int actualDamage = healthBefore - newHealth;
+            GameManager.Instance.LogManager.LogMessage($"Monster after damage: Health: {newHealth}/{_playerMonster.MaxHealth}, Damage taken: {actualDamage}");
+            
+            // Sync the networked health - use existing methods
+            if (HasStateAuthority)
             {
-                // Log the damage request
-                int healthBefore = _playerMonster.Health;
+                // We have state authority, directly update networked state
+                MonsterHealth = newHealth;
+                GameManager.Instance.LogManager.LogMessage($"Updated networked monster health directly: {MonsterHealth}");
                 
-                // Apply the damage to our monster
-                _playerMonster.TakeDamage(damageAmount);
-                
-                // Calculate actual damage dealt (after defense, etc.)
-                int actualDamage = healthBefore - _playerMonster.Health;
-                int newHealth = _playerMonster.Health;
-                
-                GameManager.Instance.LogManager.LogMessage($"Applied {actualDamage} damage to {_playerMonster.Name}: {healthBefore} -> {newHealth}");
-                
-                // Update networked health - critical to do this even without StateAuthority
-                if (HasStateAuthority)
-                {
-                    GameManager.Instance.LogManager.LogMessage($"Updating networked monster health to {newHealth}");
-                    MonsterHealth = newHealth;
-                    
-                    // Force notify all clients of the change
-                    RPC_NotifyMonsterHealthChanged(MonsterHealth);
-                }
-                else
-                {
-                    // If we don't have state authority, request the update from whoever does
-                    GameManager.Instance.LogManager.LogMessage($"Requesting networked health update to {newHealth} (don't have StateAuthority)");
-                    RPC_RequestMonsterHealthUpdate(newHealth);
-                }
-                
-                // Check for defeat
-                if (_playerMonster.Health <= 0)
-                {
-                    // Grant score to the attacking player
-                    RPC_GrantScoreToAttacker();
-                }
+                // Notify all clients of the change
+                RPC_NotifyMonsterHealthChanged(MonsterHealth);
             }
             else
             {
-                GameManager.Instance.LogManager.LogError("Cannot apply damage: _playerMonster is null");
+                // We don't have state authority, request update from state authority
+                GameManager.Instance.LogManager.LogMessage($"Requesting networked health update to {newHealth}");
+                // Use the existing method that was defined in the class
+                RPC_RequestMonsterHealthUpdate(newHealth);
+            }
+            
+            // Check for defeat
+            if (_playerMonster.Health <= 0)
+            {
+                GameManager.Instance.LogManager.LogMessage($"Monster defeated!");
+                // Use the existing method for granting score
+                RPC_GrantScoreToAttacker();
             }
         }
-        else 
+        else
         {
-            GameManager.Instance.LogManager.LogMessage($"Ignoring damage request - not for our monster (our auth: {Object.InputAuthority}, target: {targetPlayer})");
+            GameManager.Instance.LogManager.LogError("Cannot apply damage: _playerMonster is null");
         }
     }
+    else 
+    {
+        GameManager.Instance.LogManager.LogMessage($"Ignoring damage request - not for our monster (our localPlayer: {(networkRunner != null ? networkRunner.LocalPlayer.ToString() : "null")}, target: {targetPlayer})");
+    }
+}
 
     // NEW: Added to sync monster health with all clients
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
