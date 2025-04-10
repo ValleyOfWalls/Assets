@@ -154,7 +154,7 @@ public class GameUI : MonoBehaviour
         else
         {
             _opponentsUIController.UpdateOpponentStats(playerState);
-            _battleUIController.UpdateOpponentMonsterDisplay(playerState.GetMonster());
+            _battleUIController.UpdateOpponentMonsterDisplay(playerState.GetOpponentMonster());
         }
     }
     
@@ -290,6 +290,12 @@ public class GameUI : MonoBehaviour
         {
             _opponentsUIController.UpdateAllOpponents();
         }
+    }
+
+    // NEW: Method to allow access to the BattleUIController from other classes
+    public BattleUIController GetBattleUIController()
+    {
+        return _battleUIController;
     }
 
     private void OnDestroy()

@@ -111,15 +111,23 @@ public class PlayerState : NetworkBehaviour
 
     private void UpdateMonsterNetworkedProperties()
     {
-        // Use a local string variable for convenience
-        string name = _monsterManager.GetPlayerMonster()?.Name ?? "Default Monster";
-        // Then set the networked string property
-        MonsterName = name;
-        
-        // Set other monster properties directly
         Monster monster = _monsterManager.GetPlayerMonster();
         if (monster != null)
         {
+            // Update monster name to include player name for uniqueness
+            if (monster.Name == "Your Monster")
+            {
+                string playerName = PlayerName.ToString();
+                monster.Name = $"{playerName}'s Monster";
+                GameManager.Instance.LogManager.LogMessage($"Set unique monster name: {monster.Name}");
+            }
+            
+            // Use a local string variable for convenience
+            string name = monster.Name;
+            // Then set the networked string property
+            MonsterName = name;
+            
+            // Set other monster properties directly
             MonsterHealth = monster.Health;
             MonsterMaxHealth = monster.MaxHealth;
             MonsterAttack = monster.Attack;
@@ -414,42 +422,50 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-   // In the PlayerState class:
-
-// Notify all clients about monster damage
-[Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-private void RPC_NotifyMonsterDamaged(PlayerRef monsterOwner, int newHealth)
-{
-    var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
-    if (networkRunner == null) return;
-    
-    // We need to identify if this is about the local player's monster or an opponent's monster
-    if (networkRunner.LocalPlayer == monsterOwner)
+    // MODIFIED: Notify all clients about monster damage with improved UI updating
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyMonsterDamaged(PlayerRef monsterOwner, int newHealth)
     {
-        // This is about our own monster
-        Monster playerMonster = _monsterManager.GetPlayerMonster();
-        if (playerMonster != null)
+        var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
+        if (networkRunner == null) return;
+        
+        // We need to identify if this is about the local player's monster or an opponent's monster
+        if (networkRunner.LocalPlayer == monsterOwner)
         {
-            // Use the new SetHealth method instead of directly modifying health
-            playerMonster.SetHealth(newHealth);
-            GameManager.Instance.LogManager.LogMessage($"Updated our monster's health to {newHealth}");
+            // This is about our own monster
+            Monster playerMonster = _monsterManager.GetPlayerMonster();
+            if (playerMonster != null)
+            {
+                // Use the SetHealth method instead of directly modifying health
+                playerMonster.SetHealth(newHealth);
+                GameManager.Instance.LogManager.LogMessage($"Updated our monster's health to {newHealth}");
+            }
         }
-    }
-    else
-    {
-        // This is about an opponent's monster
-        Monster opponentMonster = _monsterManager.GetOpponentMonster();
-        if (opponentMonster != null)
+        else
         {
-            // Use the new SetHealth method instead of directly modifying health
-            opponentMonster.SetHealth(newHealth);
-            GameManager.Instance.LogManager.LogMessage($"Updated opponent monster's health to {newHealth}");
+            // This is about an opponent's monster
+            // First try to update directly via the BattleUIController
+            var gameUI = UnityEngine.Object.FindObjectOfType<GameUI>();
+            if (gameUI != null && gameUI.GetBattleUIController() != null)
+            {
+                gameUI.GetBattleUIController().UpdateOpponentMonsterHealth(newHealth);
+                GameManager.Instance.LogManager.LogMessage($"Directly updated opponent monster's health to {newHealth} via UI controller");
+            }
+            else
+            {
+                // Fallback to the old method
+                Monster opponentMonster = _monsterManager.GetOpponentMonster();
+                if (opponentMonster != null)
+                {
+                    opponentMonster.SetHealth(newHealth);
+                    GameManager.Instance.LogManager.LogMessage($"Updated opponent monster's health to {newHealth} via monster manager");
+                }
+            }
         }
+        
+        // Notify UI to update
+        OnStatsChanged?.Invoke(this);
     }
-    
-    // Notify UI to update
-    OnStatsChanged?.Invoke(this);
-}
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RPC_GrantScoreToAttacker(PlayerRef attackerRef)
@@ -523,6 +539,12 @@ private void RPC_NotifyMonsterDamaged(PlayerRef monsterOwner, int newHealth)
         
         // Call the monster manager to set up the opponent monster
         _monsterManager.SetOpponentMonster(opponentRef, opponentState);
+    }
+
+    // NEW: Add method to get opponent player reference
+    public PlayerRef GetOpponentPlayerRef()
+    {
+        return _opponentPlayerRef;
     }
 
     public Monster GetMonster()

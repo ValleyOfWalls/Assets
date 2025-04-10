@@ -20,6 +20,10 @@ public class BattleUIController
     private GameObject _playerAvatarObj;
     private GameObject _vsTextObj;
     
+    // Track if monster displays are initialized with real data
+    private bool _playerMonsterInitialized = false;
+    private bool _opponentMonsterInitialized = false;
+    
     public BattleUIController(GameObject battlePanel, GameObject playerMonsterPanel, PlayerState playerState)
     {
         _battlePanel = battlePanel;
@@ -133,16 +137,34 @@ public class BattleUIController
     
     public void UpdatePlayerMonsterDisplay(Monster monster)
     {
-        if (_playerMonsterDisplay != null && monster != null)
+        if (_playerMonsterDisplay == null)
+            return;
+            
+        if (monster != null)
         {
+            // Store reference first for debugging
+            Monster oldMonster = _playerMonsterDisplay.GetMonster();
+            string oldHealth = oldMonster != null ? $"{oldMonster.Health}/{oldMonster.MaxHealth}" : "null";
+            
+            // Make sure the monster has unique name with player identifier
+            if (_playerState != null && monster.Name == "Your Monster")
+            {
+                string playerName = _playerState.PlayerName.ToString();
+                monster.Name = $"{playerName}'s Monster";
+                GameManager.Instance.LogManager.LogMessage($"Renamed player monster to: {monster.Name}");
+            }
+            
             _playerMonsterDisplay.SetMonster(monster);
+            _playerMonsterInitialized = true;
+            
+            GameManager.Instance.LogManager.LogMessage($"Updated player monster display from {oldHealth} to {monster.Health}/{monster.MaxHealth}");
         }
-        else if (_playerMonsterDisplay != null)
+        else if (!_playerMonsterInitialized)
         {
             // Create default monster if needed
             Monster defaultMonster = new Monster
             {
-                Name = "Your Monster",
+                Name = _playerState != null ? $"{_playerState.PlayerName}'s Monster" : "Your Monster",
                 Health = 40,
                 MaxHealth = 40,
                 Attack = 5,
@@ -151,16 +173,46 @@ public class BattleUIController
             };
             
             _playerMonsterDisplay.SetMonster(defaultMonster);
+            _playerMonsterInitialized = true;
+            
+            GameManager.Instance.LogManager.LogMessage($"Created default player monster: {defaultMonster.Name}");
         }
     }
     
     public void UpdateOpponentMonsterDisplay(Monster monster)
     {
-        if (_opponentMonsterDisplay != null && monster != null)
+        if (_opponentMonsterDisplay == null)
+            return;
+            
+        if (monster != null)
         {
+            // Store reference first for debugging
+            Monster oldMonster = _opponentMonsterDisplay.GetMonster();
+            string oldHealth = oldMonster != null ? $"{oldMonster.Health}/{oldMonster.MaxHealth}" : "null";
+            
+            // Make sure the monster has unique name 
+            if (monster.Name == "Your Monster")
+            {
+                monster.Name = "Enemy Monster";
+                // Try to get opponent name if available
+                if (_playerState != null && _playerState.GetOpponentPlayerRef() != default)
+                {
+                    var opponentState = GameState.Instance?.GetPlayerState(_playerState.GetOpponentPlayerRef());
+                    if (opponentState != null)
+                    {
+                        string opponentName = opponentState.PlayerName.ToString();
+                        monster.Name = $"{opponentName}'s Monster";
+                    }
+                }
+                GameManager.Instance.LogManager.LogMessage($"Renamed opponent monster to: {monster.Name}");
+            }
+            
             _opponentMonsterDisplay.SetMonster(monster);
+            _opponentMonsterInitialized = true;
+            
+            GameManager.Instance.LogManager.LogMessage($"Updated opponent monster display from {oldHealth} to {monster.Health}/{monster.MaxHealth}");
         }
-        else if (_opponentMonsterDisplay != null)
+        else if (!_opponentMonsterInitialized)
         {
             // Create default opponent monster if needed
             Monster defaultOpponent = new Monster
@@ -174,6 +226,20 @@ public class BattleUIController
             };
             
             _opponentMonsterDisplay.SetMonster(defaultOpponent);
+            _opponentMonsterInitialized = true;
+            
+            GameManager.Instance.LogManager.LogMessage($"Created default opponent monster: {defaultOpponent.Name}");
+        }
+    }
+    
+    // Update opponent monster with direct health value if the monster exists
+    public void UpdateOpponentMonsterHealth(int health)
+    {
+        Monster opponentMonster = _opponentMonsterDisplay?.GetMonster();
+        if (opponentMonster != null)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Directly updating opponent monster health from {opponentMonster.Health} to {health}");
+            opponentMonster.SetHealth(health);
         }
     }
     

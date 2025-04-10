@@ -17,9 +17,6 @@ public class GameState : NetworkBehaviour
     [Networked] public NetworkBool GameActive { get; set; }
     [Networked] public NetworkBool RoundComplete { get; set; }
     
-    // REMOVED: Global turn index
-    // [Networked] public int CurrentTurnPlayerIndex { get; set; }
-    
     [Networked] public int RoundsToWin { get; set; }
 
     // NEW: Dictionary to track active turns per player
@@ -82,9 +79,6 @@ public class GameState : NetworkBehaviour
             GameActive = false;
             DraftPhaseActive = false;
             RoundComplete = false;
-            
-            // We no longer use global turn index
-            // CurrentTurnPlayerIndex = 0;
             
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage("GameState initialized with default values");
@@ -491,6 +485,16 @@ public class GameState : NetworkBehaviour
     {
         var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
         return networkRunner?.LocalPlayer ?? default;
+    }
+
+    // NEW: Helper method to get a PlayerState by PlayerRef
+    public PlayerState GetPlayerState(PlayerRef playerRef)
+    {
+        if (_playerStates.TryGetValue(playerRef, out PlayerState state))
+        {
+            return state;
+        }
+        return null;
     }
 
     // MODIFIED: Check if it's the local player's turn based on player-specific turn state
