@@ -247,6 +247,30 @@ public class LobbyManager : NetworkBehaviour
         }
     }
     
+public void ForceRegisterLocalPlayer(NetworkRunner runner)
+{
+    if (runner == null) return;
+    
+    // Get local player info
+    PlayerRef localPlayer = runner.LocalPlayer;
+    string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
+    
+    if (string.IsNullOrEmpty(playerName))
+    {
+        playerName = $"Player_{localPlayer.PlayerId}";
+    }
+    
+    // Force register the player
+    RegisterPlayer(playerName, localPlayer);
+    
+    // Log the registration
+    GameManager.Instance.LogManager.LogMessage($"Force-registered local player: {playerName} (ID: {localPlayer.PlayerId})");
+    
+    // Update the UI
+    GameManager.Instance.UIManager.UpdatePlayersList();
+}
+
+
     // Special method for single player testing
     public void DebugForceReadyCheck()
     {

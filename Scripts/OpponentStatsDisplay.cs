@@ -1,3 +1,5 @@
+// Modify OpponentStatsDisplay.cs to prevent excessive updates
+
 using System;
 using UnityEngine;
 using UnityEngine.UI;
@@ -12,6 +14,10 @@ public class OpponentStatsDisplay : MonoBehaviour
     
     // Data
     private PlayerState _playerState;
+    private string _lastPlayerName = "";
+    private int _lastHealth = -1;
+    private int _lastMaxHealth = -1;
+    private int _lastScore = -1;
     
     // Add these to help with debugging
     private bool _textElementsSet = false;
@@ -107,38 +113,59 @@ public class OpponentStatsDisplay : MonoBehaviour
             }
         }
         
-        // Update name with explicit ToString to avoid NetworkString issues
+        // Only update when values actually change
+        bool anyUpdates = false;
+        
+        // Update name (only if it changed)
         if (_nameText != null)
         {
             string playerName = _playerState.PlayerName.ToString();
-            _nameText.text = string.IsNullOrEmpty(playerName) ? "Unknown Player" : playerName;
-            GameManager.Instance.LogManager.LogMessage($"Updated opponent name text: {_nameText.text}");
-        }
-        else
-        {
-            GameManager.Instance.LogManager.LogError("Name text element is null in OpponentStatsDisplay");
+            if (string.IsNullOrEmpty(playerName))
+                playerName = "Unknown Player";
+                
+            if (_lastPlayerName != playerName)
+            {
+                _nameText.text = playerName;
+                _lastPlayerName = playerName;
+                anyUpdates = true;
+                GameManager.Instance.LogManager.LogMessage($"Updated opponent name text: {_nameText.text}");
+            }
         }
         
-        // Update health with explicit value access
+        // Update health (only if it changed)
         if (_healthText != null)
         {
-            _healthText.text = $"HP: {_playerState.Health}/{_playerState.MaxHealth}";
-            GameManager.Instance.LogManager.LogMessage($"Updated opponent health text: {_healthText.text}");
-        }
-        else
-        {
-            GameManager.Instance.LogManager.LogError("Health text element is null in OpponentStatsDisplay");
+            int health = _playerState.Health;
+            int maxHealth = _playerState.MaxHealth;
+            
+            if (_lastHealth != health || _lastMaxHealth != maxHealth)
+            {
+                _healthText.text = $"HP: {health}/{maxHealth}";
+                _lastHealth = health;
+                _lastMaxHealth = maxHealth;
+                anyUpdates = true;
+                GameManager.Instance.LogManager.LogMessage($"Updated opponent health text: {_healthText.text}");
+            }
         }
         
-        // Update score with the method call
+        // Update score (only if it changed)
         if (_scoreText != null)
         {
-            _scoreText.text = $"Score: {_playerState.GetScore()}";
-            GameManager.Instance.LogManager.LogMessage($"Updated opponent score text: {_scoreText.text}");
+            int score = _playerState.GetScore();
+            
+            if (_lastScore != score)
+            {
+                _scoreText.text = $"Score: {score}";
+                _lastScore = score;
+                anyUpdates = true;
+                GameManager.Instance.LogManager.LogMessage($"Updated opponent score text: {_scoreText.text}");
+            }
         }
-        else
+        
+        // Log only if we actually updated something
+        if (anyUpdates)
         {
-            GameManager.Instance.LogManager.LogError("Score text element is null in OpponentStatsDisplay");
+            GameManager.Instance.LogManager.LogMessage($"Updated opponent display for {_lastPlayerName}");
         }
     }
     

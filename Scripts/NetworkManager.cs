@@ -110,6 +110,12 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
                 
                 // Hide the connection panel
                 GameManager.Instance.UIManager.HideConnectUI();
+                
+                // CRITICAL FIX: Force register local player with lobby
+                GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
+                
+                // Force the player to spawn
+                GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
             }
             else
             {
@@ -167,6 +173,12 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
                 
                 // Hide the connection panel
                 GameManager.Instance.UIManager.HideConnectUI();
+                
+                // CRITICAL FIX: Force register local player with lobby
+                GameManager.Instance.LobbyManager.ForceRegisterLocalPlayer(_runner);
+                
+                // Force the player to spawn
+                GameManager.Instance.PlayerManager.OnLocalPlayerJoined(_runner, _runner.LocalPlayer);
             }
             else
             {
@@ -198,21 +210,35 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
-        GameManager.Instance.LogManager.LogMessage($"Player {player} joined the network");
+        GameManager.Instance.LogManager.LogMessage($"Player {player} joined the network (Is Local: {player == runner.LocalPlayer})");
         
         // Update all clients about the player count
         string playerCountMessage = $"Players in room: {runner.ActivePlayers.Count()}";
         GameManager.Instance.LogManager.LogMessage(playerCountMessage);
         
+        // CRITICAL FIX FOR MULTIPLE PEER MODE:
         // Call player manager to handle the new player
         if (player == runner.LocalPlayer)
         {
             // Only spawn our own player object
+            GameManager.Instance.LogManager.LogMessage($"Spawning local player {player}");
             GameManager.Instance.PlayerManager.OnLocalPlayerJoined(runner, player);
+            
+            // Also directly register with lobby for multiple peer mode
+            string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
+            if (!string.IsNullOrEmpty(playerName))
+            {
+                GameManager.Instance.LogManager.LogMessage($"Force-registering local player {playerName} with lobby");
+                GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
+                
+                // Force update the UI
+                GameManager.Instance.UIManager.UpdatePlayersList();
+            }
         }
         else
         {
             // Just track remote players
+            GameManager.Instance.LogManager.LogMessage($"Tracking remote player {player}");
             GameManager.Instance.PlayerManager.OnRemotePlayerJoined(runner, player);
         }
     }

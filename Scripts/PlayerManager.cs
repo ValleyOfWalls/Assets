@@ -24,95 +24,107 @@ public class PlayerManager : MonoBehaviour
     }
     
     // Only spawns the local player
-    public void OnLocalPlayerJoined(NetworkRunner runner, PlayerRef player)
+    // Add this method to your existing PlayerManager.cs class to fix the player spawning
+// in multiple peer mode:
+
+public void OnLocalPlayerJoined(NetworkRunner runner, PlayerRef player)
+{
+    try 
     {
-        try 
+        // Only the local player should spawn their own character
+        if (_players.ContainsKey(player))
         {
-            // Only the local player should spawn their own character
-            if (_players.ContainsKey(player))
+            GameManager.Instance.LogManager.LogMessage($"Player {player} is already spawned");
+            return;
+        }
+        
+        GameManager.Instance.LogManager.LogMessage($"Local player {player} joined - spawning player");
+        
+        if (_playerPrefab == null)
+        {
+            GameManager.Instance.LogManager.LogError("Player prefab is missing! Make sure to create the PlayerPrefab in Resources folder.");
+            return;
+        }
+        
+        // Get player name from UI
+        string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
+        
+        // Check if this player is rejoining
+        bool isRejoining = !string.IsNullOrEmpty(playerName) && 
+                           GameManager.Instance.LobbyManager.CheckIsRejoining(playerName);
+        
+        // Position the player with a unique position based on player ID to avoid spawn collisions
+        Vector2 spawnPosition = new Vector2(
+            UnityEngine.Random.Range(-5, 5) + player.PlayerId, 
+            UnityEngine.Random.Range(-5, 5) + player.PlayerId
+        );
+        
+        // CRITICAL FIX: For multiple peer mode, log the game mode we're using
+        GameMode gameMode = runner.GameMode;
+        GameManager.Instance.LogManager.LogMessage($"Spawning player with Game Mode: {gameMode}");
+        
+        // Spawn the player for everyone in the session
+        NetworkObject playerObject = runner.Spawn(_playerPrefab, position: spawnPosition, inputAuthority: player);
+        
+        // Keep track of spawned objects
+        if (playerObject != null)
+        {
+            _players[player] = playerObject;
+            
+            // Initialize player name
+            Player playerComponent = playerObject.GetComponent<Player>();
+            if (playerComponent != null)
             {
-                GameManager.Instance.LogManager.LogMessage($"Player {player} is already spawned");
-                return;
-            }
-            
-            GameManager.Instance.LogManager.LogMessage($"Local player {player} joined - spawning player");
-            
-            if (_playerPrefab == null)
-            {
-                GameManager.Instance.LogManager.LogError("Player prefab is missing! Make sure to create the PlayerPrefab in Resources folder.");
-                return;
-            }
-            
-            // Get player name from UI
-            string playerName = GameManager.Instance.UIManager.GetLocalPlayerName();
-            
-            // Check if this player is rejoining
-            bool isRejoining = !string.IsNullOrEmpty(playerName) && 
-                               GameManager.Instance.LobbyManager.CheckIsRejoining(playerName);
-            
-            // Position the player with a unique position based on player ID to avoid spawn collisions
-            Vector2 spawnPosition = new Vector2(
-                UnityEngine.Random.Range(-5, 5) + player.PlayerId, 
-                UnityEngine.Random.Range(-5, 5) + player.PlayerId
-            );
-            
-            // Spawn the player for everyone in the session
-            NetworkObject playerObject = runner.Spawn(_playerPrefab, position: spawnPosition, inputAuthority: player);
-            
-            // Keep track of spawned objects
-            if (playerObject != null)
-            {
-                _players[player] = playerObject;
+                // Set player name before any RPC calls
+                playerComponent.SetPlayerName(playerName);
                 
-                // Initialize player name
-                Player playerComponent = playerObject.GetComponent<Player>();
-                if (playerComponent != null)
+                if (isRejoining)
                 {
-                    // Set player name before any RPC calls
-                    playerComponent.SetPlayerName(playerName);
-                    
-                    if (isRejoining)
-                    {
-                        GameManager.Instance.LogManager.LogMessage($"Player {playerName} is rejoining the game");
-                        GameManager.Instance.UIManager.UpdateStatus($"Rejoined as {playerName}");
-                    }
-                    else
-                    {
-                        GameManager.Instance.LogManager.LogMessage($"Player {playerName} joined the game");
-                        GameManager.Instance.UIManager.UpdateStatus($"You joined as {playerName}");
-                    }
+                    GameManager.Instance.LogManager.LogMessage($"Player {playerName} is rejoining the game");
+                    GameManager.Instance.UIManager.UpdateStatus($"Rejoined as {playerName}");
+                }
+                else
+                {
+                    GameManager.Instance.LogManager.LogMessage($"Player {playerName} joined the game");
+                    GameManager.Instance.UIManager.UpdateStatus($"You joined as {playerName}");
                 }
                 
-                GameManager.Instance.LogManager.LogMessage($"Local player {player} spawned successfully with object ID: {playerObject.Id}");
-                
-                // Explicitly ensure this player is registered in the lobby
-                if (!string.IsNullOrEmpty(playerName))
-                {
-                    // This direct call helps ensure registration happens
-                    GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
-                    GameManager.Instance.LogManager.LogMessage($"Directly registering player {playerName} with lobby manager");
-                }
-                
-                // Spawn the player state for this player
-                SpawnPlayerState(runner, player, playerObject);
-                
-                // Create camera for the local player
-                GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
-                GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
-            }
-            else
-            {
-                GameManager.Instance.LogManager.LogError("Failed to spawn player object!");
+                // MANUALLY FORCE PLAYER REGISTRATION WITH LOBBY FOR MULTIPLE PEER MODE
+                GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
+                GameManager.Instance.LogManager.LogMessage($"Manual registration: Player {playerName} with lobby manager");
+                GameManager.Instance.UIManager.UpdatePlayersList();
             }
             
-            // Log the total number of players in the session
-            GameManager.Instance.LogManager.LogMessage($"Total players in session: {_players.Count}");
+            GameManager.Instance.LogManager.LogMessage($"Local player {player} spawned successfully with object ID: {playerObject.Id}");
+            
+            // Explicitly ensure this player is registered in the lobby
+            if (!string.IsNullOrEmpty(playerName))
+            {
+                // This direct call helps ensure registration happens
+                GameManager.Instance.LobbyManager.RegisterPlayer(playerName, player);
+                GameManager.Instance.LogManager.LogMessage($"Directly registering player {playerName} with lobby manager");
+            }
+            
+            // Spawn the player state for this player
+            SpawnPlayerState(runner, player, playerObject);
+            
+            // Create camera for the local player
+            GameManager.Instance.LogManager.LogMessage("Creating camera for local player");
+            GameManager.Instance.CameraManager.CreatePlayerCamera(playerObject.transform);
         }
-        catch (Exception ex) 
+        else
         {
-            GameManager.Instance.LogManager.LogError($"Error in OnLocalPlayerJoined: {ex.Message}\n{ex.StackTrace}");
+            GameManager.Instance.LogManager.LogError("Failed to spawn player object!");
         }
+        
+        // Log the total number of players in the session
+        GameManager.Instance.LogManager.LogMessage($"Total players in session: {_players.Count}");
     }
+    catch (Exception ex) 
+    {
+        GameManager.Instance.LogManager.LogError($"Error in OnLocalPlayerJoined: {ex.Message}\n{ex.StackTrace}");
+    }
+}
     
     // New method to spawn player state
     private void SpawnPlayerState(NetworkRunner runner, PlayerRef playerRef, NetworkObject playerObject)
@@ -287,4 +299,9 @@ public class PlayerManager : MonoBehaviour
         }
         return null;
     }
+
+    // Add this method to your existing PlayerManager.cs class to fix the player spawning
+// in multiple peer mode:
+
+
 }

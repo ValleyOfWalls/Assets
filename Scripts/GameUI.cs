@@ -11,6 +11,10 @@ public class GameUI : MonoBehaviour
     // UI References
     private Canvas _gameCanvas;
     
+//private bool _forceOpponentUpdate = false;
+private float _lastOpponentUpdateTime = 0f;
+
+
     // Main container panels
     private GameObject _mainLayout;
     private GameObject _handPanel;
@@ -1102,52 +1106,70 @@ public class GameUI : MonoBehaviour
         }
     }
 
-    private void UpdateOpponentDisplays()
-    {
-        try {
-            if (GameState.Instance == null) return;
+    // Replace this method in GameUI.cs to reduce excessive updates
+
+private void UpdateOpponentDisplays()
+{
+    try {
+        if (GameState.Instance == null) return;
+        
+        // Only update opponent displays every 2 seconds or when forced
+        if (!_forceOpponentUpdate && Time.time - _lastOpponentUpdateTime < 2.0f)
+            return;
             
-            // Get all player states
-            var playerStates = GameState.Instance.GetAllPlayerStates();
-            if (playerStates == null || playerStates.Count == 0)
-            {
-                GameManager.Instance.LogManager.LogMessage("No player states found for opponent displays");
-                return;
-            }
-            
-            PlayerRef localPlayerRef = GameState.Instance.GetLocalPlayerRef();
-            
-            // Remove opponents that aren't in the current game
-            List<PlayerRef> playersToRemove = new List<PlayerRef>();
-            foreach (var playerRef in _opponentDisplays.Keys)
-            {
-                if (!playerStates.ContainsKey(playerRef))
-                {
-                    playersToRemove.Add(playerRef);
-                }
-            }
-            
-            foreach (var playerRef in playersToRemove)
-            {
-                UnsubscribeFromOpponentState(playerRef, null);
-            }
-            
-            // Update or create displays for each opponent
-            foreach (var entry in playerStates)
-            {
-                if (entry.Key != localPlayerRef)
-                {
-                    // Update display if it exists, create it if it doesn't
-                    UpdateOpponentDisplay(entry.Key, entry.Value);
-                }
-            }
-            
-            GameManager.Instance.LogManager.LogMessage($"Updated opponent displays for {_opponentDisplays.Count} opponents");
+        _forceOpponentUpdate = false;
+        _lastOpponentUpdateTime = Time.time;
+        
+        // Get all player states
+        var playerStates = GameState.Instance.GetAllPlayerStates();
+        if (playerStates == null || playerStates.Count == 0)
+        {
+            return;
         }
-        catch (Exception ex) {
-            GameManager.Instance.LogManager.LogMessage($"Error updating opponent displays: {ex.Message}");
+        
+        PlayerRef localPlayerRef = GameState.Instance.GetLocalPlayerRef();
+        
+        // Remove opponents that aren't in the current game
+        List<PlayerRef> playersToRemove = new List<PlayerRef>();
+        foreach (var playerRef in _opponentDisplays.Keys)
+        {
+            if (!playerStates.ContainsKey(playerRef))
+            {
+                playersToRemove.Add(playerRef);
+            }
+        }
+        
+        foreach (var playerRef in playersToRemove)
+        {
+            UnsubscribeFromOpponentState(playerRef, null);
+        }
+        
+        // Update or create displays for each opponent
+        foreach (var entry in playerStates)
+        {
+            if (entry.Key != localPlayerRef)
+            {
+                // Update display if it exists, create it if it doesn't
+                UpdateOpponentDisplay(entry.Key, entry.Value);
+            }
         }
     }
+    catch (Exception ex) {
+        GameManager.Instance.LogManager.LogMessage($"Error updating opponent displays: {ex.Message}");
+    }
+}
+
+
+
+
+// Add this field to GameUI class:
+private bool _forceOpponentUpdate = false;
+
+// Add this method to GameUI class to force updates when needed:
+public void ForceOpponentUpdate()
+{
+    _forceOpponentUpdate = true;
+}
 
     private void UpdateRoundInfo(int round)
     {
@@ -1430,20 +1452,32 @@ public class GameUI : MonoBehaviour
 
     // Call this each frame to ensure the UI stays updated
     public void Update()
+{
+    if (!_initialized && !_initializationInProgress) 
     {
-        if (!_initialized && !_initializationInProgress) 
+        Initialize();
+    }
+    
+    // Only update UI periodically
+    if (_initialized)
+    {
+        // Update opponent displays (throttled internally)
+        UpdateOpponentDisplays();
+        
+        // Update own monster display occasionally
+        if (Time.frameCount % 60 == 0) // Every ~1 second
         {
-            Initialize();
+            UpdatePlayerMonsterDisplay();
         }
         
-        // Periodically update UI as a fallback but much less frequently
-        if (_initialized && Time.frameCount % 120 == 0) // Update every 120 frames (~2 seconds)
+        // Update opponent monster display occasionally
+        if (Time.frameCount % 60 == 30) // Every ~1 second, offset from player monster
         {
-            UpdateOpponentDisplays();
-            UpdatePlayerMonsterDisplay();
             UpdateOpponentMonsterDisplay();
         }
     }
+}
+
 
     private void OnDestroy()
     {

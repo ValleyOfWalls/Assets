@@ -21,6 +21,9 @@ public class PlayerState : NetworkBehaviour
     [Networked] public int MonsterAttack { get; private set; }
     [Networked] public int MonsterDefense { get; private set; }
     [Networked] public Color MonsterColor { get; private set; }
+    
+    // CRITICAL FIX: Add a networked player ID that is always set correctly
+    [Networked] public int OwnerId { get; private set; }
 
     // Opponent monster references - stored locally
     private PlayerRef _opponentPlayerRef;
@@ -58,9 +61,19 @@ public class PlayerState : NetworkBehaviour
     private int _previousScore;
     private int _previousMonsterHealth;
 
+    // Fix for multiple peer mode
+    private bool _hasRegisteredWithLobby = false;
+
     public override void Spawned()
     {
         base.Spawned();
+        
+        // CRITICAL FIX: Store the player's ID from the InputAuthority PlayerId
+        if (HasStateAuthority)
+        {
+            OwnerId = Object.InputAuthority.PlayerId;
+            GameManager.Instance.LogManager.LogMessage($"Setting OwnerId={OwnerId} for player state object {Object.Id}");
+        }
         
         if (HasStateAuthority)
         {
@@ -112,7 +125,7 @@ public class PlayerState : NetworkBehaviour
         _previousScore = Score;
         _previousMonsterHealth = MonsterHealth;
         
-        GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for {PlayerName}");
+        GameManager.Instance.LogManager.LogMessage($"PlayerState spawned for {PlayerName} with InputAuthority: {Object.InputAuthority.PlayerId}, OwnerId: {OwnerId}");
         
         // Attempt to register with GameState if available, otherwise schedule for later
         AttemptRegisterWithGameState();
@@ -122,6 +135,101 @@ public class PlayerState : NetworkBehaviour
         
         // Create local monster instance to represent networked data
         RecreateMonsterFromNetworkedData();
+        
+        // IMPORTANT: Register with lobby immediately after spawning
+        RegisterWithLobby();
+    }
+
+    private void RegisterWithLobby()
+    {
+        // Don't register multiple times
+        if (_hasRegisteredWithLobby)
+            return;
+            
+        // Only register if we have a valid PlayerName
+        if (string.IsNullOrEmpty(PlayerName.ToString()))
+        {
+            // Try to get local player name from UIManager first if we're the local player
+            if (Object.HasInputAuthority)
+            {
+                string localPlayerName = GameManager.Instance.UIManager.GetLocalPlayerName();
+                if (!string.IsNullOrEmpty(localPlayerName))
+                {
+                    PlayerName = localPlayerName;
+                }
+            }
+        }
+            
+        // Now register with the lobby
+        if (!string.IsNullOrEmpty(PlayerName.ToString()))
+        {
+            if (Runner != null)
+            {
+                GameManager.Instance.LogManager.LogMessage($"Registering player {PlayerName} with lobby manager");
+                
+                // Register directly with LobbyManager
+                GameManager.Instance.LobbyManager.RegisterPlayer(PlayerName.ToString(), Object.InputAuthority);
+                
+                // If we have state authority, broadcast to all clients
+                if (HasStateAuthority)
+                {
+                    RPC_RegisterPlayer(PlayerName.ToString(), Object.InputAuthority);
+                }
+                
+                _hasRegisteredWithLobby = true;
+                
+                // Update player list UI
+                GameManager.Instance.UIManager.UpdatePlayersList();
+            }
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogMessage("Cannot register with lobby - player name is empty");
+            
+            // Try again later
+            StartCoroutine(RetryRegisterWithLobby());
+        }
+    }
+    
+    private IEnumerator RetryRegisterWithLobby()
+    {
+        // Wait a short time
+        yield return new WaitForSeconds(0.5f);
+        
+        // Try again
+        RegisterWithLobby();
+    }
+    
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_RegisterPlayer(string playerName, PlayerRef playerRef)
+    {
+        // This RPC ensures all clients register the player
+        GameManager.Instance.LogManager.LogMessage($"RPC received to register player: {playerName}");
+        GameManager.Instance.LobbyManager.RegisterPlayer(playerName, playerRef);
+        
+        // Update player list UI
+        GameManager.Instance.UIManager.UpdatePlayersList();
+    }
+
+    public override void FixedUpdateNetwork()
+    {
+        // If we're the owner of this player state, periodically verify monster health matches 
+        // the expected value to keep it consistent
+        if (HasStateAuthority && Object.HasInputAuthority)
+        {
+            if (_playerMonster != null && _playerMonster.Health != MonsterHealth)
+            {
+                // Update networked health to match local monster if they're out of sync
+                GameManager.Instance.LogManager.LogMessage($"Resynchronizing monster health: Local={_playerMonster.Health}, Networked={MonsterHealth}");
+                MonsterHealth = _playerMonster.Health;
+            }
+            
+            // Make sure we're registered with the lobby
+            if (!_hasRegisteredWithLobby)
+            {
+                RegisterWithLobby();
+            }
+        }
     }
 
     public override void Render()
@@ -131,14 +239,27 @@ public class PlayerState : NetworkBehaviour
         // Check for changes in networked properties
         foreach (var change in _changeDetector.DetectChanges(this))
         {
+            // Only log important changes to reduce noise
+            if (change.StartsWith("Monster") || change == nameof(Health) || change == nameof(Score))
+            {
+                GameManager.Instance.LogManager.LogMessage($"Detected network change in {change} for {PlayerName}");
+            }
+            
             if (change == nameof(_networkedHand))
             {
                 UpdateLocalHandFromNetworked();
             }
             else if (change.StartsWith("Monster"))
             {
-                // Update monster if monster properties changed
-                RecreateMonsterFromNetworkedData();
+                // Only update our own monster from networked data
+                if (Object.HasInputAuthority)
+                {
+                    GameManager.Instance.LogManager.LogMessage($"Updating our monster from networked data: {change}");
+                    RecreateMonsterFromNetworkedData();
+                    
+                    // Force an update to the UI
+                    OnStatsChanged?.Invoke(this);
+                }
             }
             else if (change == nameof(Health) || change == nameof(MaxHealth) ||
                     change == nameof(Energy) || change == nameof(MaxEnergy) ||
@@ -150,33 +271,21 @@ public class PlayerState : NetworkBehaviour
         }
         
         // Also check for changes in properties even if we're not the state authority
-        // This helps ensure UI updates for all clients
         if (!HasStateAuthority)
         {
-            if (_previousHealth != Health || _previousEnergy != Energy || _previousScore != Score)
+            // Only check for our own monster's health changes
+            if (Object.HasInputAuthority && _previousMonsterHealth != MonsterHealth && _playerMonster != null)
             {
-                // Update stored values
-                _previousHealth = Health;
-                _previousEnergy = Energy;
-                _previousScore = Score;
-                
-                // Notify UI
-                OnStatsChanged?.Invoke(this);
-            }
-            
-            // Check for monster health changes too
-            if (_previousMonsterHealth != MonsterHealth && _playerMonster != null)
-            {
+                GameManager.Instance.LogManager.LogMessage($"Direct update to our monster health: {_previousMonsterHealth} -> {MonsterHealth}");
                 _previousMonsterHealth = MonsterHealth;
                 _playerMonster.Health = MonsterHealth;
+                
+                // Ensure UI updates
+                OnStatsChanged?.Invoke(this);
             }
         }
-        
-        // Update opponent monster if we have a valid reference
-        UpdateOpponentMonsterFromState();
     }
 
-    // MODIFIED: Changed to handle non-authority clients
     public void DrawInitialHand()
     {
         if (HasStateAuthority)
@@ -220,7 +329,6 @@ public class PlayerState : NetworkBehaviour
         GameManager.Instance.LogManager.LogMessage($"Force drew initial hand for {PlayerName} with {_hand.Count} cards");
     }
     
-    // NEW RPC: Notify all clients that the hand has changed
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyHandChanged()
     {
@@ -228,7 +336,6 @@ public class PlayerState : NetworkBehaviour
         UpdateLocalHandFromNetworked();
     }
 
-    // Create local monster from networked data
     private void RecreateMonsterFromNetworkedData()
     {
         // Create or update the monster from networked properties
@@ -244,13 +351,12 @@ public class PlayerState : NetworkBehaviour
         _playerMonster.Defense = MonsterDefense;
         _playerMonster.TintColor = MonsterColor;
         
-        GameManager.Instance.LogManager.LogMessage($"Recreated monster for {PlayerName} from networked data");
+        GameManager.Instance.LogManager.LogMessage($"Recreated our monster from networked data: HP={MonsterHealth}/{MonsterMaxHealth}");
         
         // Update the previously tracked monster health
         _previousMonsterHealth = MonsterHealth;
     }
 
-    // Update opponent monster if opponent state changed
     private void UpdateOpponentMonsterFromState()
     {
         if (_opponentPlayerState != null)
@@ -260,17 +366,54 @@ public class PlayerState : NetworkBehaviour
                 _opponentMonster = new Monster();
             }
             
-            // Copy data from opponent's networked monster
-            _opponentMonster.Name = _opponentPlayerState.MonsterName.ToString();
-            _opponentMonster.Health = _opponentPlayerState.MonsterHealth;
-            _opponentMonster.MaxHealth = _opponentPlayerState.MonsterMaxHealth;
-            _opponentMonster.Attack = _opponentPlayerState.MonsterAttack;
-            _opponentMonster.Defense = _opponentPlayerState.MonsterDefense;
-            _opponentMonster.TintColor = _opponentPlayerState.MonsterColor;
+            // Only update if values have changed
+            bool hasChanged = false;
+            
+            if (_opponentMonster.Name != _opponentPlayerState.MonsterName.ToString())
+            {
+                _opponentMonster.Name = _opponentPlayerState.MonsterName.ToString();
+                hasChanged = true;
+            }
+            
+            if (_opponentMonster.Health != _opponentPlayerState.MonsterHealth)
+            {
+                _opponentMonster.Health = _opponentPlayerState.MonsterHealth;
+                hasChanged = true;
+                GameManager.Instance.LogManager.LogMessage($"Opponent monster health updated to: {_opponentMonster.Health}/{_opponentMonster.MaxHealth}");
+            }
+            
+            if (_opponentMonster.MaxHealth != _opponentPlayerState.MonsterMaxHealth)
+            {
+                _opponentMonster.MaxHealth = _opponentPlayerState.MonsterMaxHealth;
+                hasChanged = true;
+            }
+            
+            if (_opponentMonster.Attack != _opponentPlayerState.MonsterAttack)
+            {
+                _opponentMonster.Attack = _opponentPlayerState.MonsterAttack;
+                hasChanged = true;
+            }
+            
+            if (_opponentMonster.Defense != _opponentPlayerState.MonsterDefense)
+            {
+                _opponentMonster.Defense = _opponentPlayerState.MonsterDefense;
+                hasChanged = true;
+            }
+            
+            if (!_opponentMonster.TintColor.Equals(_opponentPlayerState.MonsterColor))
+            {
+                _opponentMonster.TintColor = _opponentPlayerState.MonsterColor;
+                hasChanged = true;
+            }
+            
+            // Log only if something changed
+            if (hasChanged)
+            {
+                GameManager.Instance.LogManager.LogMessage($"Updated opponent monster data for {_opponentMonster.Name}");
+            }
         }
     }
 
-    // Update local hand from networked data
     private void UpdateLocalHandFromNetworked()
     {
         _hand.Clear();
@@ -290,7 +433,6 @@ public class PlayerState : NetworkBehaviour
         GameManager.Instance.LogManager.LogMessage($"Hand updated for {PlayerName} with {_hand.Count} cards");
     }
 
-    // Try to register with GameState
     private void AttemptRegisterWithGameState()
     {
         if (Runner != null && Object != null)
@@ -307,18 +449,15 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-    // Keep trying to register until successful
     private IEnumerator RegisterWithGameStateWhenAvailable()
     {
-        float timeoutSeconds = 30.0f; // Set a reasonable timeout
+        float timeoutSeconds = 30.0f;
         float startTime = Time.time;
         
-        // Keep trying until we succeed or timeout
         while (GameState.Instance == null)
         {
-            yield return new WaitForSeconds(0.5f); // Check every half second
+            yield return new WaitForSeconds(0.5f);
             
-            // Check for timeout
             if (Time.time - startTime > timeoutSeconds)
             {
                 GameManager.Instance.LogManager.LogError("Timed out waiting for GameState.Instance to become available");
@@ -326,7 +465,6 @@ public class PlayerState : NetworkBehaviour
             }
         }
         
-        // GameState is now available, register with it
         AttemptRegisterWithGameState();
     }
 
@@ -358,7 +496,7 @@ public class PlayerState : NetworkBehaviour
             TintColor = MonsterColor
         };
         
-        GameManager.Instance.LogManager.LogMessage($"Monster initialized for {PlayerName}");
+        GameManager.Instance.LogManager.LogMessage($"Monster initialized for {PlayerName}: HP={MonsterHealth}/{MonsterMaxHealth}");
     }
 
     private void CreateStartingDeck()
@@ -434,7 +572,6 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-    // Update networked hand from local hand
     private void UpdateNetworkedHand()
     {
         if (!HasStateAuthority) return;
@@ -474,7 +611,6 @@ public class PlayerState : NetworkBehaviour
         _hand.Add(drawnCard);
     }
 
-    // Add RPC to broadcast stat changes to all clients
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyStatsChanged()
     {
@@ -487,7 +623,6 @@ public class PlayerState : NetworkBehaviour
         OnStatsChanged?.Invoke(this);
     }
 
-    // FIXED: Update this method to properly track damage and sync monster health
     public void PlayCard(int cardIndex, Monster target)
     {
         if (!HasStateAuthority || cardIndex < 0 || cardIndex >= _hand.Count) return;
@@ -501,6 +636,9 @@ public class PlayerState : NetworkBehaviour
             return;
         }
         
+        // Log the card play
+        GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} playing {card.Name} on {(target != null ? target.Name : "null")}");
+        
         // Handle card effects based on type and target
         bool cardPlayed = false;
         
@@ -512,20 +650,35 @@ public class PlayerState : NetworkBehaviour
                     // Apply damage
                     if (card.DamageAmount > 0)
                     {
-                        // Store pre-damage health for debugging
-                        int healthBefore = target.Health;
-                        
-                        // Apply the damage
-                        target.TakeDamage(card.DamageAmount);
-                        
-                        // Debug log the damage
-                        int actualDamage = healthBefore - target.Health;
-                        GameManager.Instance.LogManager.LogMessage($"Card {card.Name} dealt {actualDamage} damage to {target.Name} (Health: {healthBefore} -> {target.Health})");
-                        
-                        // Update opponent monster state if we're damaging the opponent's monster
-                        UpdateOpponentMonsterState(target);
+                        // If we're targeting an opponent's monster, send an RPC to the opponent's player state
+                        if (target == _opponentMonster && _opponentPlayerState != null && _opponentPlayerRef != default)
+                        {
+                            GameManager.Instance.LogManager.LogMessage($"Sending damage to opponent's monster: {card.DamageAmount} damage to {target.Name} owned by ID {_opponentPlayerState.OwnerId}");
+                            
+                            // CRITICAL FIX: Use the OwnerId instead of PlayerRef
+                            RPC_DamageMonster(_opponentPlayerState.OwnerId, card.DamageAmount);
+                            cardPlayed = true;
+                        }
+                        else if (target == _playerMonster)
+                        {
+                            // This is our own monster (weird but valid)
+                            int healthBefore = target.Health;
+                            target.TakeDamage(card.DamageAmount);
+                            
+                            // Update networked monster health
+                            MonsterHealth = target.Health;
+                            
+                            // Log the damage
+                            int actualDamage = healthBefore - target.Health;
+                            GameManager.Instance.LogManager.LogMessage($"Applied {actualDamage} damage to our own monster {target.Name} (Health: {healthBefore} -> {target.Health})");
+                            
+                            cardPlayed = true;
+                        }
+                        else
+                        {
+                            GameManager.Instance.LogManager.LogError($"Invalid target for card {card.Name}: Not opponent's or player's monster");
+                        }
                     }
-                    cardPlayed = true;
                 }
                 break;
                 
@@ -563,40 +716,71 @@ public class PlayerState : NetworkBehaviour
                 // Apply to all enemies (currently just one)
                 if (target != null && card.DamageAmount > 0)
                 {
-                    // Store pre-damage health for debugging
-                    int healthBefore = target.Health;
-                    
-                    // Apply the damage
-                    target.TakeDamage(card.DamageAmount);
-                    
-                    // Debug log the damage
-                    int actualDamage = healthBefore - target.Health;
-                    GameManager.Instance.LogManager.LogMessage($"Card {card.Name} dealt {actualDamage} damage to {target.Name} (Health: {healthBefore} -> {target.Health})");
-                    
-                    // Update opponent monster state
-                    UpdateOpponentMonsterState(target);
+                    // IMPORTANT CHANGE: If we're targeting an opponent's monster,
+                    // don't apply damage locally, just notify the target's owner to apply damage
+                    if (target == _opponentMonster && _opponentPlayerState != null && _opponentPlayerRef != default)
+                    {
+                        GameManager.Instance.LogManager.LogMessage($"Sending damage to opponent's monster: {card.DamageAmount} damage to {target.Name} owned by ID {_opponentPlayerState.OwnerId}");
+                        
+                        // CRITICAL FIX: Use the OwnerId instead of PlayerRef
+                        RPC_DamageMonster(_opponentPlayerState.OwnerId, card.DamageAmount);
+                        cardPlayed = true;
+                    }
+                    else if (target == _playerMonster)
+                    {
+                        // This is our own monster (weird but valid)
+                        int healthBefore = target.Health;
+                        target.TakeDamage(card.DamageAmount);
+                        
+                        // Update networked monster health
+                        MonsterHealth = target.Health;
+                        
+                        // Log the damage
+                        int actualDamage = healthBefore - target.Health;
+                        GameManager.Instance.LogManager.LogMessage($"Applied {actualDamage} damage to our own monster {target.Name} (Health: {healthBefore} -> {target.Health})");
+                        
+                        cardPlayed = true;
+                    }
+                    else
+                    {
+                        GameManager.Instance.LogManager.LogError($"Invalid target for card {card.Name}: Not opponent's or player's monster");
+                    }
                 }
-                cardPlayed = true;
                 break;
                 
             case CardTarget.All:
                 // Apply effects to all characters and monsters
+                cardPlayed = true;
                 
                 // First apply to opponent's monster if provided
                 if (target != null && !target.Equals(_playerMonster) && card.DamageAmount > 0)
                 {
-                    // Store pre-damage health for debugging
-                    int healthBefore = target.Health;
-                    
-                    // Apply the damage
-                    target.TakeDamage(card.DamageAmount);
-                    
-                    // Debug log the damage
-                    int actualDamage = healthBefore - target.Health;
-                    GameManager.Instance.LogManager.LogMessage($"Card {card.Name} dealt {actualDamage} damage to {target.Name} (Health: {healthBefore} -> {target.Health})");
-                    
-                    // Update opponent monster state
-                    UpdateOpponentMonsterState(target);
+                    // If we're targeting an opponent's monster,
+                    // don't apply damage locally, just notify the target's owner to apply damage
+                    if (target == _opponentMonster && _opponentPlayerState != null && _opponentPlayerRef != default)
+                    {
+                        GameManager.Instance.LogManager.LogMessage($"Sending damage to opponent's monster: {card.DamageAmount} damage to {target.Name} owned by ID {_opponentPlayerState.OwnerId}");
+                        
+                        // CRITICAL FIX: Use the OwnerId instead of PlayerRef
+                        RPC_DamageMonster(_opponentPlayerState.OwnerId, card.DamageAmount);
+                    }
+                    else if (target == _playerMonster)
+                    {
+                        // This is our own monster (weird but valid)
+                        int healthBefore = target.Health;
+                        target.TakeDamage(card.DamageAmount);
+                        
+                        // Update networked monster health
+                        MonsterHealth = target.Health;
+                        
+                        // Log the damage
+                        int actualDamage = healthBefore - target.Health;
+                        GameManager.Instance.LogManager.LogMessage($"Applied {actualDamage} damage to our own monster {target.Name} (Health: {healthBefore} -> {target.Health})");
+                    }
+                    else
+                    {
+                        GameManager.Instance.LogManager.LogError($"Invalid target for card {card.Name}: Not opponent's or player's monster");
+                    }
                 }
                 
                 // Then apply to player's monster if available
@@ -621,8 +805,6 @@ public class PlayerState : NetworkBehaviour
                 {
                     ModifyEnergy(card.EnergyGain);
                 }
-                
-                cardPlayed = true;
                 break;
         }
         
@@ -641,66 +823,121 @@ public class PlayerState : NetworkBehaviour
             // Notify all clients
             RPC_NotifyHandChanged();
             
-            GameManager.Instance.LogManager.LogMessage($"{PlayerName} played {card.Name}");
+            GameManager.Instance.LogManager.LogMessage($"{PlayerName} played {card.Name} successfully");
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogError($"Failed to play card {card.Name}");
         }
     }
 
-    // FIXED: Update opponent monster state when we damage it
-    private void UpdateOpponentMonsterState(Monster target)
+    // CRITICAL FIX: Use OwnerId instead of PlayerRef 
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    private void RPC_DamageMonster(int targetOwnerId, int damageAmount)
     {
-        if (target == _opponentMonster && _opponentPlayerState != null && HasStateAuthority)
+        GameManager.Instance.LogManager.LogMessage($"RPC_DamageMonster received: targetId={targetOwnerId}, myOwnerId={OwnerId}, damage={damageAmount}");
+        
+        // CRITICAL FIX: Compare against OwnerId instead of PlayerRef
+        if (OwnerId == targetOwnerId)
         {
-            // Modified to pass the damage amount rather than the current health
-            // We'll use an RPC to notify the opponent that their monster was damaged
-            RPC_NotifyMonsterDamaged(_opponentPlayerRef, target.Health, target.MaxHealth);
-        }
-    }
-
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_NotifyMonsterDamaged(PlayerRef targetPlayer, int newHealth, int maxHealth)
-    {
-        // Only the owner of the monster should process this
-        if (Object.InputAuthority == targetPlayer)
-        {
-            // Update our local monster health
+            GameManager.Instance.LogManager.LogMessage($"THIS IS OUR MONSTER! Applying damage {damageAmount}");
+            
             if (_playerMonster != null)
             {
-                // FIXED: Don't blindly set health, but update it to match the expected value
-                // This prevents cases where the health might temporarily appear to reset
+                // Log the damage request
+                int healthBefore = _playerMonster.Health;
                 
-                // Log the old health value for debugging
-                int oldHealth = _playerMonster.Health;
+                // Apply the damage to our monster
+                _playerMonster.TakeDamage(damageAmount);
                 
-                // Set the monster's health to match the expected value from the RPC
-                _playerMonster.Health = newHealth; 
+                // Calculate actual damage dealt (after defense, etc.)
+                int actualDamage = healthBefore - _playerMonster.Health;
+                int newHealth = _playerMonster.Health;
                 
-                // Also update networked data
-                MonsterHealth = newHealth;
-                MonsterMaxHealth = maxHealth;
+                GameManager.Instance.LogManager.LogMessage($"Applied {actualDamage} damage to {_playerMonster.Name}: {healthBefore} -> {newHealth}");
                 
-                // Update tracked value
-                _previousMonsterHealth = newHealth;
-                
-                GameManager.Instance.LogManager.LogMessage($"Monster {_playerMonster.Name} health updated from {oldHealth} to {newHealth}/{maxHealth}");
+                // Update networked health - critical to do this even without StateAuthority
+                if (HasStateAuthority)
+                {
+                    // Direct update by state authority
+                    MonsterHealth = newHealth;
+                    GameManager.Instance.LogManager.LogMessage($"Updated networked monster health to {newHealth} directly");
+                    
+                    // Notify all clients
+                    RPC_NotifyMonsterHealthChanged(newHealth);
+                }
+                else
+                {
+                    // Request update from state authority
+                    GameManager.Instance.LogManager.LogMessage($"Requesting monster health update to {newHealth}");
+                    RPC_RequestMonsterHealthUpdate(newHealth);
+                }
                 
                 // Check for defeat
-                if (newHealth <= 0)
+                if (_playerMonster.Health <= 0)
                 {
                     // Grant score to the attacking player
                     RPC_GrantScoreToAttacker();
                 }
             }
+            else
+            {
+                GameManager.Instance.LogManager.LogError("Cannot apply damage: _playerMonster is null");
+            }
+        }
+        else 
+        {
+            GameManager.Instance.LogManager.LogMessage($"Not our monster. Our ID: {OwnerId}, target ID: {targetOwnerId}");
         }
     }
 
-    // NEW: Added to sync monster block values
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestMonsterHealthUpdate(int newHealth)
+    {
+        // Only the state authority should handle this
+        if (HasStateAuthority)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Received monster health update request: {newHealth}");
+            MonsterHealth = newHealth;
+            
+            // Notify all clients
+            RPC_NotifyMonsterHealthChanged(newHealth);
+        }
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyMonsterHealthChanged(int newHealth)
+    {
+        GameManager.Instance.LogManager.LogMessage($"Monster health notification: {newHealth}");
+        
+        // Update local monster if this is our monster
+        if (Object.HasInputAuthority && _playerMonster != null)
+        {
+            _playerMonster.Health = newHealth;
+            _previousMonsterHealth = newHealth;
+            
+            // Ensure UI updates
+            OnStatsChanged?.Invoke(this);
+            
+            // Force GameUI to update opponent UI if needed
+            var gameUI = FindObjectOfType<GameUI>();
+            if (gameUI != null)
+            {
+                gameUI.ForceOpponentUpdate();
+            }
+        }
+    }
+
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_UpdateMonsterBlock(int blockAmount)
     {
-        // Update networked data as needed
-        // Currently we don't sync block in networked data, but we could add it if needed
-        
         GameManager.Instance.LogManager.LogMessage($"Monster {MonsterName} block updated to {blockAmount}");
+        
+        // Ensure local monster has the block
+        if (_playerMonster != null && Object.HasInputAuthority)
+        {
+            _playerMonster.AddBlock(blockAmount);
+        }
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
@@ -792,7 +1029,7 @@ public class PlayerState : NetworkBehaviour
                 TintColor = opponentState.MonsterColor
             };
             
-            GameManager.Instance.LogManager.LogMessage($"{PlayerName} now fighting against {_opponentMonster.Name}");
+            GameManager.Instance.LogManager.LogMessage($"{PlayerName} now fighting against {_opponentMonster.Name} from player ID {_opponentPlayerState.OwnerId}");
         }
         else
         {
@@ -843,32 +1080,32 @@ public class PlayerState : NetworkBehaviour
     }
 
     public void EndTurn()
-{
-    if (!HasStateAuthority) return;
-    
-    // Process end of turn effects
-    
-    // MODIFIED: Request next turn for this specific player
-    if (GameState.Instance != null)
     {
-        // Get player ref
-        var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
-        if (networkRunner != null)
+        if (!HasStateAuthority) return;
+        
+        // Process end of turn effects
+        
+        // Request next turn for this specific player
+        if (GameState.Instance != null)
         {
-            PlayerRef localPlayer = Object.InputAuthority;
-            GameState.Instance.NextTurn(localPlayer);
-            GameManager.Instance.LogManager.LogMessage($"{PlayerName} ended their turn, passing to monster");
+            // Get player ref
+            var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
+            if (networkRunner != null)
+            {
+                PlayerRef localPlayer = Object.InputAuthority;
+                GameState.Instance.NextTurn(localPlayer);
+                GameManager.Instance.LogManager.LogMessage($"{PlayerName} ended their turn, passing to monster");
+            }
+            else
+            {
+                GameManager.Instance.LogManager.LogError("Could not get NetworkRunner in EndTurn");
+            }
         }
         else
         {
-            GameManager.Instance.LogManager.LogError("Could not get NetworkRunner in EndTurn");
+            GameManager.Instance.LogManager.LogError("GameState.Instance is null in EndTurn");
         }
     }
-    else
-    {
-        GameManager.Instance.LogManager.LogError("GameState.Instance is null in EndTurn");
-    }
-}
 
     public List<CardData> GetHand()
     {
