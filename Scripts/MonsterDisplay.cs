@@ -1,3 +1,4 @@
+// valleyofwalls-assets/Scripts/MonsterDisplay.cs
 using System;
 using System.Collections;
 using UnityEngine;
@@ -5,7 +6,6 @@ using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using TMPro;
 
-// Display monster in the battle area with targeting support
 public class MonsterDisplay : MonoBehaviour, IDropHandler
 {
     // References
@@ -15,548 +15,279 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
     private Slider _healthBar;
     private Image _blockImage;
     private TMP_Text _blockText;
-    
     // Data
     private Monster _monster;
-    private int _currentBlock = 0;
-    
     // Visual feedback
     private Image _highlightImage;
     private Image _backgroundImage;
     private Color _originalBackgroundColor;
-    
-    // Determines if this is the player's own monster (for targeting)
     private bool _isPlayerMonster = false;
-    
-    // For controlling damage flash effect
     private Coroutine _damageFlashCoroutine = null;
-    
+
+    // Awake: Create visuals immediately
     private void Awake()
     {
         CreateVisuals();
     }
-    
-    // New method: handle resubscribing to events when enabled
-    private void OnEnable()
-    {
-        // When enabled, resubscribe to the monster events if monster exists
-        if (_monster != null)
-        {
-            // Unsubscribe first to avoid duplicate subscriptions
-            _monster.OnHealthChanged -= UpdateHealth;
-            _monster.OnBlockChanged -= UpdateBlock;
-            
-            // Resubscribe
-            _monster.OnHealthChanged += UpdateHealth;
-            _monster.OnBlockChanged += UpdateBlock;
-            
-            // Force update UI with current values
-            UpdateHealth(_monster.Health, _monster.MaxHealth);
-            UpdateBlock(_monster.GetBlock());
-            
-            GameManager.Instance.LogManager.LogMessage($"MonsterDisplay OnEnable: Resubscribed to events for {_monster.Name}");
-        }
+
+    // OnEnable/OnDisable/OnDestroy: Handle event subscriptions and cleanup
+    private void OnEnable() { if (_monster != null) { SubscribeToMonsterEvents(); UpdateVisualsFromMonster(); } }
+    private void OnDisable() { if (_monster != null) { UnsubscribeFromMonsterEvents(); } StopDamageFlash(); }
+    private void OnDestroy() { if (_monster != null) { UnsubscribeFromMonsterEvents(); } StopDamageFlash(); } // Ensure cleanup
+
+    private void SubscribeToMonsterEvents() {
+        if (_monster == null) return;
+        _monster.OnHealthChanged -= UpdateHealth; _monster.OnBlockChanged -= UpdateBlock; // Unsub first
+        _monster.OnHealthChanged += UpdateHealth; _monster.OnBlockChanged += UpdateBlock;
     }
-    
-    // New method: clean up event subscriptions when disabled
-    private void OnDisable()
-    {
-        // Unsubscribe when disabled
-        if (_monster != null)
-        {
-            _monster.OnHealthChanged -= UpdateHealth;
-            _monster.OnBlockChanged -= UpdateBlock;
-            
-            GameManager.Instance.LogManager.LogMessage($"MonsterDisplay OnDisable: Unsubscribed from events for {_monster.Name}");
-        }
-        
-        // Cancel any active flash coroutine
-        if (_damageFlashCoroutine != null)
-        {
-            StopCoroutine(_damageFlashCoroutine);
-            _damageFlashCoroutine = null;
-            
-            // Reset the background color
-            if (_backgroundImage != null)
-            {
-                _backgroundImage.color = _originalBackgroundColor;
-            }
-        }
+    private void UnsubscribeFromMonsterEvents() {
+        if (_monster == null) return;
+        _monster.OnHealthChanged -= UpdateHealth; _monster.OnBlockChanged -= UpdateBlock;
     }
-    
+
+     private void StopDamageFlash() {
+         if (_damageFlashCoroutine != null) {
+             StopCoroutine(_damageFlashCoroutine); _damageFlashCoroutine = null;
+             if (_backgroundImage != null) _backgroundImage.color = _originalBackgroundColor;
+         }
+     }
+
+    // Creates the visual elements if they don't exist
     private void CreateVisuals()
     {
-        // Make sure we have an Image component for the background
+        // Background Image
         _backgroundImage = GetComponent<Image>();
-        if (_backgroundImage == null)
-        {
-            _backgroundImage = gameObject.AddComponent<Image>();
-        }
+        if (_backgroundImage == null) _backgroundImage = gameObject.AddComponent<Image>();
         _backgroundImage.color = new Color(0.2f, 0.2f, 0.2f, 0.5f);
         _originalBackgroundColor = _backgroundImage.color;
-        
-        // Create highlight for targeting feedback
+
+        // Highlight Image (for targeting)
         GameObject highlightObj = new GameObject("Highlight");
-        highlightObj.transform.SetParent(transform, false);
+        highlightObj.transform.SetParent(transform, false); // Ensure correct parenting
         _highlightImage = highlightObj.AddComponent<Image>();
         _highlightImage.color = new Color(1f, 1f, 0.5f, 0.0f); // Start invisible
-        
+        _highlightImage.raycastTarget = false; // Don't block drops
         RectTransform highlightRect = highlightObj.GetComponent<RectTransform>();
-        highlightRect.anchorMin = Vector2.zero;
-        highlightRect.anchorMax = Vector2.one;
-        highlightRect.offsetMin = new Vector2(-10, -10);
-        highlightRect.offsetMax = new Vector2(10, 10);
-        
-        // Create monster image
+        highlightRect.anchorMin = Vector2.zero; highlightRect.anchorMax = Vector2.one;
+        highlightRect.offsetMin = new Vector2(-10, -10); highlightRect.offsetMax = new Vector2(10, 10); // Slightly larger
+
+        // Monster Image (Placeholder Sprite)
         GameObject imageObj = new GameObject("MonsterImage");
         imageObj.transform.SetParent(transform, false);
         _monsterImage = imageObj.AddComponent<Image>();
-        _monsterImage.color = Color.white; // Default color
-        
+        _monsterImage.sprite = CreateDefaultSprite();
+        _monsterImage.color = Color.white;
+        _monsterImage.raycastTarget = false; // Image shouldn't block drops
         RectTransform imageRect = imageObj.GetComponent<RectTransform>();
-        imageRect.anchorMin = new Vector2(0.2f, 0.3f);
-        imageRect.anchorMax = new Vector2(0.8f, 0.8f);
-        imageRect.offsetMin = Vector2.zero;
-        imageRect.offsetMax = Vector2.zero;
-        
-        // Create name text
+        imageRect.anchorMin = new Vector2(0.2f, 0.3f); imageRect.anchorMax = new Vector2(0.8f, 0.8f); // Centered
+        imageRect.offsetMin = Vector2.zero; imageRect.offsetMax = Vector2.zero;
+
+        // Name Text
         GameObject nameObj = new GameObject("NameText");
         nameObj.transform.SetParent(transform, false);
         _nameText = nameObj.AddComponent<TextMeshProUGUI>();
-        _nameText.text = "Monster";
-        _nameText.fontSize = 16;
-        _nameText.alignment = TextAlignmentOptions.Center;
-        _nameText.color = Color.white;
-        
+        _nameText.text = "Monster"; _nameText.fontSize = 16; _nameText.alignment = TextAlignmentOptions.Center; _nameText.color = Color.white;
+        _nameText.raycastTarget = false;
         RectTransform nameRect = nameObj.GetComponent<RectTransform>();
-        nameRect.anchorMin = new Vector2(0, 0.8f);
-        nameRect.anchorMax = new Vector2(1, 1);
-        nameRect.offsetMin = Vector2.zero;
-        nameRect.offsetMax = Vector2.zero;
-        
-        // Create health text
+        nameRect.anchorMin = new Vector2(0, 0.8f); nameRect.anchorMax = new Vector2(1, 1); // Top
+        nameRect.offsetMin = Vector2.zero; nameRect.offsetMax = Vector2.zero;
+
+        // Health Text
         GameObject healthObj = new GameObject("HealthText");
         healthObj.transform.SetParent(transform, false);
         _healthText = healthObj.AddComponent<TextMeshProUGUI>();
-        _healthText.text = "HP: 40/40";
-        _healthText.fontSize = 14;
-        _healthText.alignment = TextAlignmentOptions.Center;
-        _healthText.color = Color.white;
-        
+        _healthText.text = "HP: -- / --"; _healthText.fontSize = 14; _healthText.alignment = TextAlignmentOptions.Center; _healthText.color = Color.white;
+        _healthText.raycastTarget = false;
         RectTransform healthRect = healthObj.GetComponent<RectTransform>();
-        healthRect.anchorMin = new Vector2(0, 0.15f);
-        healthRect.anchorMax = new Vector2(1, 0.25f);
-        healthRect.offsetMin = Vector2.zero;
-        healthRect.offsetMax = Vector2.zero;
-        
-        // Create health bar
+        healthRect.anchorMin = new Vector2(0, 0.15f); healthRect.anchorMax = new Vector2(1, 0.25f); // Above health bar
+        healthRect.offsetMin = Vector2.zero; healthRect.offsetMax = Vector2.zero;
+
+        // Health Bar Slider
         GameObject barObj = new GameObject("HealthBar");
         barObj.transform.SetParent(transform, false);
         _healthBar = barObj.AddComponent<Slider>();
-        _healthBar.minValue = 0;
-        _healthBar.maxValue = 1;
-        _healthBar.value = 1;
-        
+        _healthBar.minValue = 0; _healthBar.maxValue = 1; _healthBar.value = 1; _healthBar.interactable = false;
         RectTransform barRect = barObj.GetComponent<RectTransform>();
-        barRect.anchorMin = new Vector2(0.1f, 0.05f);
-        barRect.anchorMax = new Vector2(0.9f, 0.15f);
-        barRect.offsetMin = Vector2.zero;
-        barRect.offsetMax = Vector2.zero;
-        
-        // Add background and fill for the health bar
+        barRect.anchorMin = new Vector2(0.1f, 0.05f); barRect.anchorMax = new Vector2(0.9f, 0.15f); // Bottom center
+        barRect.offsetMin = Vector2.zero; barRect.offsetMax = Vector2.zero;
+
+        // Health Bar Background
         GameObject barBg = new GameObject("Background");
-        barBg.transform.SetParent(barObj.transform, false);
+        barBg.transform.SetParent(barObj.transform, false); // Parent to slider
         Image barBgImage = barBg.AddComponent<Image>();
-        barBgImage.color = new Color(0.2f, 0.2f, 0.2f);
-        
+        barBgImage.color = new Color(0.2f, 0.2f, 0.2f); barBgImage.raycastTarget = false;
         RectTransform barBgRect = barBg.GetComponent<RectTransform>();
-        barBgRect.anchorMin = Vector2.zero;
-        barBgRect.anchorMax = Vector2.one;
-        barBgRect.offsetMin = Vector2.zero;
-        barBgRect.offsetMax = Vector2.zero;
-        
+        barBgRect.anchorMin = Vector2.zero; barBgRect.anchorMax = Vector2.one; // Fill slider area
+        barBgRect.offsetMin = Vector2.zero; barBgRect.offsetMax = Vector2.zero;
+        _healthBar.targetGraphic = barBgImage; // Assign background for interaction visuals (though disabled)
+
+        // Health Bar Fill Area
+        GameObject barFillArea = new GameObject("Fill Area"); // Slider needs Fill Area parent
+        barFillArea.transform.SetParent(barObj.transform, false);
+        RectTransform fillAreaRect = barFillArea.AddComponent<RectTransform>();
+        fillAreaRect.anchorMin = Vector2.zero; fillAreaRect.anchorMax = Vector2.one;
+        fillAreaRect.offsetMin = Vector2.zero; fillAreaRect.offsetMax = Vector2.zero;
+
+        // Health Bar Fill
         GameObject barFill = new GameObject("Fill");
-        barFill.transform.SetParent(barObj.transform, false);
+        barFill.transform.SetParent(fillAreaRect.transform, false); // Parent fill to Fill Area
         Image barFillImage = barFill.AddComponent<Image>();
-        barFillImage.color = new Color(0.8f, 0.2f, 0.2f);
-        
+        barFillImage.color = new Color(0.8f, 0.2f, 0.2f); // Red fill
+        barFillImage.raycastTarget = false;
         RectTransform barFillRect = barFill.GetComponent<RectTransform>();
-        barFillRect.anchorMin = Vector2.zero;
-        barFillRect.anchorMax = new Vector2(1, 1);
-        barFillRect.offsetMin = Vector2.zero;
-        barFillRect.offsetMax = Vector2.zero;
-        
-        _healthBar.targetGraphic = barBgImage;
-        _healthBar.fillRect = barFillRect;
-        
-        // Create block display
+         barFillRect.anchorMin = Vector2.zero; barFillRect.anchorMax = Vector2.one; // Fill the fill area
+        barFillRect.offsetMin = Vector2.zero; barFillRect.offsetMax = Vector2.zero;
+        _healthBar.fillRect = barFillRect; // Assign fill rect
+
+         // Block Display (Shield Icon + Text)
         GameObject blockObj = new GameObject("BlockDisplay");
-        blockObj.transform.SetParent(transform, false);
-        
-        // Block background
+        blockObj.transform.SetParent(transform, false); // Parent to main display
+        // Position block display (e.g., top right)
+        RectTransform blockRect = blockObj.AddComponent<RectTransform>();
+        blockRect.anchorMin = new Vector2(1, 1); blockRect.anchorMax = new Vector2(1, 1);
+        blockRect.pivot = new Vector2(1, 1); blockRect.anchoredPosition = new Vector2(-5, -5); // Offset from top-right
+        blockRect.sizeDelta = new Vector2(40, 40); // Adjust size as needed
+
         _blockImage = blockObj.AddComponent<Image>();
-        _blockImage.color = new Color(0.2f, 0.6f, 0.8f, 0.8f);
-        _blockImage.enabled = false; // Start hidden
-        
-        RectTransform blockRect = blockObj.GetComponent<RectTransform>();
-        blockRect.anchorMin = new Vector2(0.8f, 0.8f);
-        blockRect.anchorMax = new Vector2(1, 1);
-        blockRect.offsetMin = new Vector2(0, 0);
-        blockRect.offsetMax = new Vector2(0, 10);
-        
-        // Block text
+        // TODO: Assign a shield sprite to _blockImage.sprite here if desired
+        _blockImage.color = new Color(0.2f, 0.6f, 0.8f, 0.8f); // Blueish tint
+        _blockImage.enabled = false; _blockImage.raycastTarget = false; // Start hidden
+
         GameObject blockTextObj = new GameObject("BlockText");
-        blockTextObj.transform.SetParent(blockObj.transform, false);
+        blockTextObj.transform.SetParent(blockObj.transform, false); // Parent to block display obj
         _blockText = blockTextObj.AddComponent<TextMeshProUGUI>();
-        _blockText.text = "0";
-        _blockText.fontSize = 18;
-        _blockText.fontStyle = FontStyles.Bold;
-        _blockText.alignment = TextAlignmentOptions.Center;
-        _blockText.color = Color.white;
-        
+        _blockText.text = "0"; _blockText.fontSize = 18; _blockText.fontStyle = FontStyles.Bold;
+        _blockText.alignment = TextAlignmentOptions.Center; _blockText.color = Color.white; _blockText.raycastTarget = false;
+        // Center text within the block display object
         RectTransform blockTextRect = blockTextObj.GetComponent<RectTransform>();
-        blockTextRect.anchorMin = Vector2.zero;
-        blockTextRect.anchorMax = Vector2.one;
-        blockTextRect.offsetMin = Vector2.zero;
-        blockTextRect.offsetMax = Vector2.zero;
-        
-        // Create default circle sprite for monster
-        _monsterImage.sprite = CreateDefaultSprite();
+        blockTextRect.anchorMin = Vector2.zero; blockTextRect.anchorMax = Vector2.one;
+        blockTextRect.offsetMin = Vector2.zero; blockTextRect.offsetMax = Vector2.zero;
+        _blockText.enabled = false; // Start hidden
     }
-    
-    private Sprite CreateDefaultSprite()
-    {
-        // Create a default circle sprite
-        Texture2D texture = new Texture2D(128, 128);
-        Color[] colors = new Color[128 * 128];
-        
-        for (int y = 0; y < 128; y++)
-        {
-            for (int x = 0; x < 128; x++)
-            {
-                float dx = x - 64;
-                float dy = y - 64;
-                float dist = Mathf.Sqrt(dx * dx + dy * dy);
-                
-                if (dist < 60)
-                    colors[y * 128 + x] = Color.white;
-                else
-                    colors[y * 128 + x] = Color.clear;
-            }
-        }
-        
-        texture.SetPixels(colors);
-        texture.Apply();
-        
+
+    // Creates a simple white circle sprite
+    private Sprite CreateDefaultSprite() {
+        Texture2D texture = new Texture2D(128, 128); Color[] colors = new Color[128 * 128];
+        Vector2 center = new Vector2(63.5f, 63.5f); float radiusSq = 60f * 60f;
+        for (int y = 0; y < 128; y++) { for (int x = 0; x < 128; x++) {
+                float dx = x - center.x; float dy = y - center.y;
+                colors[y * 128 + x] = (dx * dx + dy * dy < radiusSq) ? Color.white : Color.clear; } }
+        texture.SetPixels(colors); texture.Apply();
         return Sprite.Create(texture, new Rect(0, 0, 128, 128), new Vector2(0.5f, 0.5f));
     }
-    
-    // NEW: Set whether this monster belongs to the player
-    public void SetIsPlayerMonster(bool isPlayerMonster)
-    {
+
+
+    // Set if this is the player's own monster (for targeting and visuals)
+    public void SetIsPlayerMonster(bool isPlayerMonster) {
         _isPlayerMonster = isPlayerMonster;
-        
-        // Update visuals to differentiate
-        if (_isPlayerMonster)
-        {
-            // Player's monster has a blue tint to the background
-            if (_backgroundImage != null)
-            {
-                _backgroundImage.color = new Color(0.2f, 0.3f, 0.4f, 0.5f);
-                _originalBackgroundColor = _backgroundImage.color;
-            }
-        }
-        else
-        {
-            // Enemy monster has a red tint to the background
-            if (_backgroundImage != null)
-            {
-                _backgroundImage.color = new Color(0.4f, 0.2f, 0.2f, 0.5f);
-                _originalBackgroundColor = _backgroundImage.color;
-            }
+        if (_backgroundImage != null) {
+             _backgroundImage.color = _isPlayerMonster ? new Color(0.2f, 0.3f, 0.4f, 0.5f) : new Color(0.4f, 0.2f, 0.2f, 0.5f);
+             _originalBackgroundColor = _backgroundImage.color;
         }
     }
-    
-    // NEW: Check if this is the player's monster
-    public bool IsPlayerMonster()
-    {
-        return _isPlayerMonster;
-    }
-    
+    // Check if this is the player's monster
+    public bool IsPlayerMonster() { return _isPlayerMonster; }
+
+    // Assigns a monster and updates visuals
     public void SetMonster(Monster monster)
     {
-        if (monster == null)
-        {
-            Debug.LogWarning("Tried to set null monster in MonsterDisplay");
-            return;
-        }
-        
-        // Cancel any active flash coroutine before switching monsters
-        if (_damageFlashCoroutine != null)
-        {
-            StopCoroutine(_damageFlashCoroutine);
-            _damageFlashCoroutine = null;
-            
-            // Reset the background color
-            if (_backgroundImage != null)
-            {
-                _backgroundImage.color = _originalBackgroundColor;
-            }
-        }
-        
-        // Unsubscribe from previous monster events if any
-        if (_monster != null)
-        {
-            _monster.OnHealthChanged -= UpdateHealth;
-            _monster.OnBlockChanged -= UpdateBlock;
-        }
-        
+        StopDamageFlash();
+        if (_monster != null) UnsubscribeFromMonsterEvents();
         _monster = monster;
-        
-        // Update name
-        if (_nameText != null)
-        {
-            _nameText.text = monster.Name;
-        }
-        
-        // Update health
-        if (_healthText != null)
-        {
-            _healthText.text = $"HP: {monster.Health}/{monster.MaxHealth}";
-        }
-        
-        // Update health bar
-        if (_healthBar != null)
-        {
-            _healthBar.maxValue = monster.MaxHealth;
-            _healthBar.value = monster.Health;
-        }
-        
-        // Update image tint
-        if (_monsterImage != null)
-        {
-            _monsterImage.color = monster.TintColor;
-        }
-        
-        // Subscribe to monster events
-        monster.OnHealthChanged += UpdateHealth;
-        monster.OnBlockChanged += UpdateBlock;
-        
-        // Force a health update to ensure UI is in sync with monster state
-        UpdateHealth(monster.Health, monster.MaxHealth);
-        
-        // Initial block update
-        UpdateBlock(monster.GetBlock());
-        
-        // Add debugging log
-        GameManager.Instance.LogManager.LogMessage($"MonsterDisplay set monster: {monster.Name}, Health: {monster.Health}/{monster.MaxHealth}, IsPlayerMonster: {_isPlayerMonster}");
+        UpdateVisualsFromMonster(); // Update visuals regardless of null/not null
+        if (_monster != null) SubscribeToMonsterEvents(); // Subscribe only if not null
     }
-    
+
+    // Updates all visual elements based on the current _monster
+    private void UpdateVisualsFromMonster() {
+         if (_monster == null || _monster.MaxHealth <= 0) { // Handle null or placeholder monster (MaxHealth=0)
+             if (_nameText != null) _nameText.text = _monster?.Name ?? "---"; // Show name if available (e.g., "Waiting...")
+             UpdateHealth(0, 0); // Use 0/0 to trigger placeholder text in UpdateHealth
+             if (_monsterImage != null) _monsterImage.color = Color.gray;
+             UpdateBlock(0);
+             return;
+         };
+         // Update with actual monster data
+         if (_nameText != null) _nameText.text = _monster.Name;
+         UpdateHealth(_monster.Health, _monster.MaxHealth);
+         if (_monsterImage != null) _monsterImage.color = _monster.TintColor;
+         UpdateBlock(_monster.GetBlock());
+    }
+
+    // Update Health Display - Handles Placeholder Text
     private void UpdateHealth(int health, int maxHealth)
     {
-        // Update health text
-        if (_healthText != null)
-        {
-            _healthText.text = $"HP: {health}/{maxHealth}";
-            GameManager.Instance.LogManager.LogMessage($"MonsterDisplay updated health text to: {_healthText.text} for {(_monster != null ? _monster.Name : "unknown monster")}");
-        }
-        
-        // Update health bar
-        if (_healthBar != null)
-        {
-            _healthBar.maxValue = maxHealth;
-            _healthBar.value = health;
-        }
-        
-        // Visual feedback for damage - only if health decreased
-        if (_monster != null && health < _monster.Health)
-        {
-            FlashDamage();
+        if (maxHealth <= 0) { // Treat 0 or less max health as placeholder signal
+            if (_healthText != null) _healthText.text = "HP: -- / --";
+            if (_healthBar != null) { _healthBar.gameObject.SetActive(false); }
+        } else {
+            if (_healthText != null) _healthText.text = $"HP: {health}/{maxHealth}";
+            if (_healthBar != null) {
+                 _healthBar.gameObject.SetActive(true);
+                 _healthBar.minValue = 0; _healthBar.maxValue = maxHealth; _healthBar.value = health;
+            }
         }
     }
-    
+
+    // Update Block Display
     private void UpdateBlock(int block)
     {
-        _currentBlock = block;
-        
-        // Show/hide block display
-        if (_blockImage != null)
-        {
-            _blockImage.enabled = block > 0;
-        }
-        
-        // Update block text
-        if (_blockText != null)
-        {
-            _blockText.text = block.ToString();
-        }
+        bool showBlock = block > 0;
+        if (_blockImage != null) _blockImage.enabled = showBlock;
+        if (_blockText != null) { _blockText.text = block.ToString(); _blockText.enabled = showBlock; }
     }
-    
-    // FIX: Improved damage flash with proper cleanup
-    private void FlashDamage()
-    {
-        // Cancel any existing flash coroutine
-        if (_damageFlashCoroutine != null)
-        {
-            StopCoroutine(_damageFlashCoroutine);
-        }
-        
-        // Start a new flash coroutine
-        _damageFlashCoroutine = StartCoroutine(DamageFlashEffect());
-    }
-    
-    // FIX: Complete coroutine that properly resets the background color
-    private IEnumerator DamageFlashEffect()
-    {
-        // Flash red when taking damage
-        if (_backgroundImage == null)
-        {
-            _damageFlashCoroutine = null;
-            yield break;
-        }
-        
-        // Store original color if not already stored
-        if (_originalBackgroundColor == Color.clear)
-        {
-            _originalBackgroundColor = _backgroundImage.color;
-        }
-        
-        // Set to damage color (bright red)
-        _backgroundImage.color = new Color(0.8f, 0.2f, 0.2f, 0.8f);
-        
-        // Wait for flash duration
+
+    // --- Damage Flash ---
+    private void FlashDamage() { StopDamageFlash(); _damageFlashCoroutine = StartCoroutine(DamageFlashEffect()); }
+    private IEnumerator DamageFlashEffect() {
+        if (_backgroundImage == null) { _damageFlashCoroutine = null; yield break; }
+        Color flashColor = new Color(0.8f, 0.2f, 0.2f, 0.8f);
+        _backgroundImage.color = flashColor;
         yield return new WaitForSeconds(0.1f);
-        
-        // Fade back to original color
-        float duration = 0.2f;
-        float elapsed = 0f;
-        
-        while (elapsed < duration)
-        {
-            elapsed += Time.deltaTime;
-            float t = elapsed / duration;
-            
-            _backgroundImage.color = Color.Lerp(
-                new Color(0.8f, 0.2f, 0.2f, 0.8f),
-                _originalBackgroundColor,
-                t
-            );
-            
+        float duration = 0.2f; float elapsed = 0f;
+        while (elapsed < duration) {
+            elapsed += Time.deltaTime; float t = elapsed / duration;
+            _backgroundImage.color = Color.Lerp(flashColor, _originalBackgroundColor, t);
             yield return null;
         }
-        
-        // Ensure we're set back to the original color
         _backgroundImage.color = _originalBackgroundColor;
-        
-        // Clear the coroutine reference
         _damageFlashCoroutine = null;
     }
-    
-    // Handle card dropping on monster
-    public void OnDrop(PointerEventData eventData)
-    {
-        // Safety check for null eventData
-        if (eventData == null || eventData.pointerDrag == null) 
-        {
-            return;
-        }
-        
-        // Check if a card was dropped on this monster
-        GameObject droppedObject = eventData.pointerDrag;
-        CardDisplay cardDisplay = droppedObject.GetComponent<CardDisplay>();
+
+    // --- Drag and Drop ---
+    public void OnDrop(PointerEventData eventData) {
+        if (eventData?.pointerDrag == null) return;
+        CardDisplay cardDisplay = eventData.pointerDrag.GetComponent<CardDisplay>();
         if (cardDisplay == null) return;
-        
-        // Get the card data
         CardData card = cardDisplay.GetCardData();
-        
-        // Check if this card can target this monster based on player/enemy status
+        if (card == null || _monster == null) return; // Need card and monster data
+
         bool canTarget = false;
-        
-        if (_isPlayerMonster)
-        {
-            // Player's own monster can be targeted by Self or All cards
-            canTarget = (card.Target == CardTarget.Self || card.Target == CardTarget.All);
-        }
-        else
-        {
-            // Opponent's monster can be targeted by Enemy, AllEnemies, or All cards
-            canTarget = (card.Target == CardTarget.Enemy || 
-                        card.Target == CardTarget.AllEnemies || 
-                        card.Target == CardTarget.All);
-        }
-        
-        if (!canTarget)
-        {
-            // Show invalid target feedback
-            StartCoroutine(FlashInvalidTarget());
-            GameManager.Instance.LogManager.LogMessage($"Cannot target this monster with card {card.Name}");
-            return;
-        }
-        
-        // Card dropped event will be handled by the CardDisplay component
+        if (_isPlayerMonster) canTarget = (card.Target == CardTarget.Self || card.Target == CardTarget.All);
+        else canTarget = (card.Target == CardTarget.Enemy || card.Target == CardTarget.AllEnemies || card.Target == CardTarget.All);
+
+        if (!canTarget) { StartCoroutine(FlashInvalidTarget()); }
         ShowHighlight(false);
     }
-    
-    // NEW: Visual feedback for invalid targeting
-    private IEnumerator FlashInvalidTarget()
-    {
-        if (_highlightImage == null)
-            yield break;
-            
-        // Flash red to indicate invalid target
+
+    // --- Targeting Highlights ---
+    private IEnumerator FlashInvalidTarget() {
+        if (_highlightImage == null) yield break;
         _highlightImage.color = new Color(1f, 0f, 0f, 0.5f);
-        
         yield return new WaitForSeconds(0.2f);
-        
-        // Hide highlight
         _highlightImage.color = new Color(1f, 1f, 0.5f, 0f);
     }
-    
-    // Show highlight when valid card is dragged over
-    public void ShowHighlight(bool show)
-    {
-        if (_highlightImage != null)
-        {
+    public void ShowHighlight(bool show) {
+        if (_highlightImage != null) {
             _highlightImage.color = new Color(1f, 1f, 0.5f, show ? 0.5f : 0f);
         }
     }
-    
-    // FIX: Improved cleanup in OnDestroy
-    private void OnDestroy()
-    {
-        // Cancel any active coroutines
-        if (_damageFlashCoroutine != null)
-        {
-            StopCoroutine(_damageFlashCoroutine);
-            _damageFlashCoroutine = null;
-        }
-        
-        // Unsubscribe from events
-        if (_monster != null)
-        {
-            _monster.OnHealthChanged -= UpdateHealth;
-            _monster.OnBlockChanged -= UpdateBlock;
-        }
-    }
-    
-    // Get the monster data
-    public Monster GetMonster()
-    {
-        return _monster;
-    }
-    
-    // FIX: Method to directly set health display without triggering effects
-    public void SetHealthDisplay(int health, int maxHealth)
-    {
-        if (_healthText != null)
-        {
-            _healthText.text = $"HP: {health}/{maxHealth}";
-        }
-        
-        if (_healthBar != null)
-        {
-            _healthBar.maxValue = maxHealth;
-            _healthBar.value = health;
-        }
+
+    // --- Getters ---
+    public Monster GetMonster() { return _monster; }
+
+    // Direct health display update
+    public void SetHealthDisplay(int health, int maxHealth) {
+         UpdateHealth(health, maxHealth);
     }
 }
