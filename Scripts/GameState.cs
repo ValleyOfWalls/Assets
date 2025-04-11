@@ -197,6 +197,40 @@ public class GameState : NetworkBehaviour
         OnGameActiveChanged?.Invoke(true);
     }
     
+    // FIX: New RPC method to handle turn end requests from any client
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_RequestEndTurn(PlayerRef player)
+    {
+        // Only process if we have state authority
+        if (!HasStateAuthority)
+        {
+            GameManager.Instance.LogManager.LogError($"RPC_RequestEndTurn received but this client doesn't have state authority!");
+            return;
+        }
+        
+        GameManager.Instance.LogManager.LogMessage($"Processing turn end request for player {player}");
+        
+        // If it's currently the player's turn, switch to monster's turn
+        if (_isPlayerTurn.ContainsKey(player) && _isPlayerTurn[player])
+        {
+            // Change to monster's turn
+            _isPlayerTurn[player] = false;
+            _isMonsterTurn[player] = true;
+            
+            // Notify all clients about the turn change
+            RPC_NotifyPlayerTurnState(player, false);
+            
+            // Simulate monster's turn after a short delay
+            StartCoroutine(SimulateMonsterTurn(player));
+            
+            GameManager.Instance.LogManager.LogMessage($"Player {player}'s turn ended, monster's turn started");
+        }
+        else
+        {
+            GameManager.Instance.LogManager.LogError($"Cannot end turn for player {player}: not currently in player turn state");
+        }
+    }
+    
     // NEW RPC: Notify player about their turn state
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyPlayerTurnState(PlayerRef player, bool isPlayerTurn)
@@ -302,10 +336,11 @@ public class GameState : NetworkBehaviour
     }
 
     // FIX: Modified NextTurn to properly handle turn transitions and resource refreshing
-    public void NextTurn(PlayerRef player)
+    // Also added return boolean to indicate success
+    public bool NextTurn(PlayerRef player)
     {
         if (!_isSpawned || !HasStateAuthority || !GameActive)
-            return;
+            return false;
         
         // If it's currently the player's turn, switch to monster's turn
         if (_isPlayerTurn.ContainsKey(player) && _isPlayerTurn[player])
@@ -321,6 +356,7 @@ public class GameState : NetworkBehaviour
             StartCoroutine(SimulateMonsterTurn(player));
             
             GameManager.Instance.LogManager.LogMessage($"Player {player}'s turn ended, monster's turn started");
+            return true;
         }
         // If it's the monster's turn ending
         else if (_isMonsterTurn.ContainsKey(player) && _isMonsterTurn[player])
@@ -349,7 +385,11 @@ public class GameState : NetworkBehaviour
             
             // Check if all players have completed their turns
             CheckRoundCompletion();
+            return true;
         }
+        
+        GameManager.Instance.LogManager.LogError($"Invalid turn state for player {player}");
+        return false;
     }
     
     // FIX: Separate method to check for round completion

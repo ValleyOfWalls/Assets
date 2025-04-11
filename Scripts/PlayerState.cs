@@ -445,7 +445,7 @@ public class PlayerState : NetworkBehaviour
         {
             // This is about an opponent's monster
             // First try to update directly via the BattleUIController
-            var gameUI = UnityEngine.Object.FindObjectOfType<GameUI>();
+            var gameUI = UnityEngine.Object.FindAnyObjectByType<GameUI>(); // Fixed: Using FindAnyObjectByType instead
             if (gameUI != null && gameUI.GetBattleUIController() != null)
             {
                 gameUI.GetBattleUIController().UpdateOpponentMonsterHealth(newHealth);
@@ -585,21 +585,71 @@ public class PlayerState : NetworkBehaviour
         GameManager.Instance.LogManager.LogMessage($"{PlayerName} ready for new round");
     }
 
-    public void EndTurn()
+    // FIXED: Complete rewrite of EndTurn to fix authority issues
+    // Replace your PlayerState.EndTurn method with this simplified version
+public void EndTurn()
+{
+    if (GameState.Instance == null)
     {
-        if (!HasStateAuthority) return;
+        GameManager.Instance.LogManager.LogError("GameState.Instance is null in EndTurn");
+        return;
+    }
         
-        // Request next turn for this specific player
-        if (GameState.Instance != null)
+    PlayerRef localPlayer = Object.InputAuthority;
+    
+    // Send the turn end request directly to GameState via RPC
+    GameState.Instance.RPC_RequestEndTurn(localPlayer);
+    GameManager.Instance.LogManager.LogMessage($"{PlayerName} requested to end their turn");
+}
+    
+    // Re-designed RPC with better logging and error handling
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    private void RPC_RequestEndTurn(PlayerRef playerRef)
+    {
+        // Log that the RPC was received
+        GameManager.Instance.LogManager.LogMessage($"RPC_RequestEndTurn received for player {playerRef}");
+        
+        // This should only execute on the state authority
+        if (!HasStateAuthority)
         {
-            PlayerRef localPlayer = Object.InputAuthority;
-            GameState.Instance.NextTurn(localPlayer);
-            GameManager.Instance.LogManager.LogMessage($"{PlayerName} ended their turn, passing to monster");
+            GameManager.Instance.LogManager.LogError($"RPC_RequestEndTurn received but we don't have state authority! PlayerRef={playerRef}");
+            return;
+        }
+        
+        // Safety check for GameState
+        if (GameState.Instance == null)
+        {
+            GameManager.Instance.LogManager.LogError("GameState.Instance is null in RPC_RequestEndTurn");
+            return;
+        }
+        
+        // Process the turn end request through GameState
+        GameManager.Instance.LogManager.LogMessage($"Processing turn end request for player {playerRef}");
+        
+        // Call the GameState with explicit logging
+        bool result = GameState.Instance.NextTurn(playerRef);
+        
+        if (result)
+        {
+            GameManager.Instance.LogManager.LogMessage($"Turn change processed successfully for {playerRef}");
+            
+            // Also notify all clients about the turn change via RPC
+            RPC_NotifyTurnChanged(playerRef, false); // Switch to monster turn
         }
         else
         {
-            GameManager.Instance.LogManager.LogError("GameState.Instance is null in EndTurn");
+            GameManager.Instance.LogManager.LogError($"Turn change failed for {playerRef}");
         }
+    }
+    
+    // NEW: RPC to notify all clients about a turn change
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_NotifyTurnChanged(PlayerRef player, bool isPlayerTurn)
+    {
+        GameManager.Instance.LogManager.LogMessage($"Turn state changed for player {player} - isPlayerTurn: {isPlayerTurn}");
+        
+        // We can't directly invoke the GameState event from here, so just log the notification
+        // The GameState itself will handle raising its own events
     }
 
     public List<CardData> GetHand()
