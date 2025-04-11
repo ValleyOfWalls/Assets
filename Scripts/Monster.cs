@@ -1,6 +1,14 @@
 using System;
 using UnityEngine;
 
+// Enum for different damage effect types
+public enum DamageEffectType
+{
+    Damage,
+    Heal,
+    Block
+}
+
 // Monster class - represents both player pets and opponents
 [Serializable]
 public class Monster
@@ -26,11 +34,12 @@ public class Monster
     public event Action<int, int> OnHealthChanged;
     public event Action<int> OnBlockChanged;
     
-    // NEW METHOD: Set health with event triggering
+    // Set health with event triggering
     public void SetHealth(int newHealth)
     {
         if (Health != newHealth)
         {
+            int oldHealth = Health;
             Health = Mathf.Clamp(newHealth, 0, MaxHealth);
             OnHealthChanged?.Invoke(Health, MaxHealth);
             
@@ -190,12 +199,4 @@ public class Monster
         if (GameManager.Instance != null)
             GameManager.Instance.LogManager.LogMessage($"{Name} leveled up! HP: +{healthBonus}, ATK: +{attackBonus}, DEF: +{defenseBonus}");
     }
-}
-
-// Enum for different damage effect types
-public enum DamageEffectType
-{
-    Damage,
-    Heal,
-    Block
 }

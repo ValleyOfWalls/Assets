@@ -24,6 +24,10 @@ public class BattleUIController
     private bool _playerMonsterInitialized = false;
     private bool _opponentMonsterInitialized = false;
     
+    // FIX: Keep track of current opponent monster health for visual continuity
+    private int _currentOpponentMonsterHealth = -1;
+    private int _currentOpponentMonsterMaxHealth = -1;
+    
     public BattleUIController(GameObject battlePanel, GameObject playerMonsterPanel, PlayerState playerState)
     {
         _battlePanel = battlePanel;
@@ -135,6 +139,7 @@ public class BattleUIController
         _playerMonsterDisplay.SetIsPlayerMonster(true);
     }
     
+    // FIX: Improved player monster display updating
     public void UpdatePlayerMonsterDisplay(Monster monster)
     {
         if (_playerMonsterDisplay == null)
@@ -179,6 +184,7 @@ public class BattleUIController
         }
     }
     
+    // FIX: Improved opponent monster display updating with health tracking
     public void UpdateOpponentMonsterDisplay(Monster monster)
     {
         if (_opponentMonsterDisplay == null)
@@ -189,6 +195,10 @@ public class BattleUIController
             // Store reference first for debugging
             Monster oldMonster = _opponentMonsterDisplay.GetMonster();
             string oldHealth = oldMonster != null ? $"{oldMonster.Health}/{oldMonster.MaxHealth}" : "null";
+            
+            // FIX: Store current health values before updating the monster
+            int savedHealth = _currentOpponentMonsterHealth;
+            int savedMaxHealth = _currentOpponentMonsterMaxHealth;
             
             // Make sure the monster has unique name 
             if (monster.Name == "Your Monster")
@@ -207,10 +217,37 @@ public class BattleUIController
                 GameManager.Instance.LogManager.LogMessage($"Renamed opponent monster to: {monster.Name}");
             }
             
-            _opponentMonsterDisplay.SetMonster(monster);
-            _opponentMonsterInitialized = true;
+            // If this is our first time initializing the opponent, just set it normally
+            if (!_opponentMonsterInitialized)
+            {
+                _opponentMonsterDisplay.SetMonster(monster);
+                _opponentMonsterInitialized = true;
+                
+                // Initialize health tracking
+                _currentOpponentMonsterHealth = monster.Health;
+                _currentOpponentMonsterMaxHealth = monster.MaxHealth;
+            }
+            else
+            {
+                // FIX: For subsequent updates, we need to maintain the correct health values
+                // Set the monster but then update the health display if we have stored values
+                _opponentMonsterDisplay.SetMonster(monster);
+                
+                if (savedHealth > 0 && savedHealth != monster.Health)
+                {
+                    // Use our cached value rather than the monster's current health
+                    GameManager.Instance.LogManager.LogMessage($"Maintaining opponent monster health at {savedHealth}/{savedMaxHealth} instead of {monster.Health}/{monster.MaxHealth}");
+                    _opponentMonsterDisplay.SetHealthDisplay(savedHealth, savedMaxHealth);
+                }
+                else
+                {
+                    // Update our cached values with the new monster's values
+                    _currentOpponentMonsterHealth = monster.Health;
+                    _currentOpponentMonsterMaxHealth = monster.MaxHealth;
+                }
+            }
             
-            GameManager.Instance.LogManager.LogMessage($"Updated opponent monster display from {oldHealth} to {monster.Health}/{monster.MaxHealth}");
+            GameManager.Instance.LogManager.LogMessage($"Updated opponent monster display from {oldHealth} to {_currentOpponentMonsterHealth}/{_currentOpponentMonsterMaxHealth}");
         }
         else if (!_opponentMonsterInitialized)
         {
@@ -228,18 +265,30 @@ public class BattleUIController
             _opponentMonsterDisplay.SetMonster(defaultOpponent);
             _opponentMonsterInitialized = true;
             
+            // Initialize health tracking
+            _currentOpponentMonsterHealth = defaultOpponent.Health;
+            _currentOpponentMonsterMaxHealth = defaultOpponent.MaxHealth;
+            
             GameManager.Instance.LogManager.LogMessage($"Created default opponent monster: {defaultOpponent.Name}");
         }
     }
     
-    // Update opponent monster with direct health value if the monster exists
+    // FIX: Method to update opponent monster health directly
     public void UpdateOpponentMonsterHealth(int health)
     {
         Monster opponentMonster = _opponentMonsterDisplay?.GetMonster();
         if (opponentMonster != null)
         {
-            GameManager.Instance.LogManager.LogMessage($"Directly updating opponent monster health from {opponentMonster.Health} to {health}");
+            GameManager.Instance.LogManager.LogMessage($"Directly updating opponent monster health from {_currentOpponentMonsterHealth} to {health}");
+            
+            // Update our cached value
+            _currentOpponentMonsterHealth = health;
+            
+            // Update the monster's health
             opponentMonster.SetHealth(health);
+            
+            // Ensure the display reflects this health
+            _opponentMonsterDisplay.SetHealthDisplay(health, opponentMonster.MaxHealth);
         }
     }
     
@@ -295,6 +344,17 @@ public class BattleUIController
         {
             effectText.text = $"-{card.DamageAmount}";
             effectText.color = Color.white;
+            
+            // FIX: Update our cached opponent monster health if this is a damage card targeting the opponent
+            MonsterDisplay targetDisplay = targetObj.GetComponent<MonsterDisplay>();
+            if (targetDisplay != null && !targetDisplay.IsPlayerMonster() && targetDisplay == _opponentMonsterDisplay)
+            {
+                // Pre-emptively update our cached health to reflect the expected damage
+                // This helps maintain visual continuity even if network updates are delayed
+                int newHealth = Mathf.Max(0, _currentOpponentMonsterHealth - card.DamageAmount);
+                _currentOpponentMonsterHealth = newHealth;
+                GameManager.Instance.LogManager.LogMessage($"Preemptively updated opponent monster cached health to {_currentOpponentMonsterHealth}");
+            }
         }
         else if (card.BlockAmount > 0)
         {
@@ -363,5 +423,12 @@ public class BattleUIController
         
         // Destroy the effect object
         GameObject.Destroy(effectObj);
+    }
+    
+    // FIX: Method to reset cached health values for new round
+    public void ResetCachedHealth()
+    {
+        _currentOpponentMonsterHealth = -1;
+        _currentOpponentMonsterMaxHealth = -1;
     }
 }

@@ -22,9 +22,14 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
     
     // Visual feedback
     private Image _highlightImage;
+    private Image _backgroundImage;
+    private Color _originalBackgroundColor;
     
     // Determines if this is the player's own monster (for targeting)
     private bool _isPlayerMonster = false;
+    
+    // For controlling damage flash effect
+    private Coroutine _damageFlashCoroutine = null;
     
     private void Awake()
     {
@@ -64,17 +69,31 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
             
             GameManager.Instance.LogManager.LogMessage($"MonsterDisplay OnDisable: Unsubscribed from events for {_monster.Name}");
         }
+        
+        // Cancel any active flash coroutine
+        if (_damageFlashCoroutine != null)
+        {
+            StopCoroutine(_damageFlashCoroutine);
+            _damageFlashCoroutine = null;
+            
+            // Reset the background color
+            if (_backgroundImage != null)
+            {
+                _backgroundImage.color = _originalBackgroundColor;
+            }
+        }
     }
     
     private void CreateVisuals()
     {
         // Make sure we have an Image component for the background
-        Image backgroundImage = GetComponent<Image>();
-        if (backgroundImage == null)
+        _backgroundImage = GetComponent<Image>();
+        if (_backgroundImage == null)
         {
-            backgroundImage = gameObject.AddComponent<Image>();
+            _backgroundImage = gameObject.AddComponent<Image>();
         }
-        backgroundImage.color = new Color(0.2f, 0.2f, 0.2f, 0.5f);
+        _backgroundImage.color = new Color(0.2f, 0.2f, 0.2f, 0.5f);
+        _originalBackgroundColor = _backgroundImage.color;
         
         // Create highlight for targeting feedback
         GameObject highlightObj = new GameObject("Highlight");
@@ -241,19 +260,19 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         if (_isPlayerMonster)
         {
             // Player's monster has a blue tint to the background
-            Image bgImage = GetComponent<Image>();
-            if (bgImage != null)
+            if (_backgroundImage != null)
             {
-                bgImage.color = new Color(0.2f, 0.3f, 0.4f, 0.5f);
+                _backgroundImage.color = new Color(0.2f, 0.3f, 0.4f, 0.5f);
+                _originalBackgroundColor = _backgroundImage.color;
             }
         }
         else
         {
             // Enemy monster has a red tint to the background
-            Image bgImage = GetComponent<Image>();
-            if (bgImage != null)
+            if (_backgroundImage != null)
             {
-                bgImage.color = new Color(0.4f, 0.2f, 0.2f, 0.5f);
+                _backgroundImage.color = new Color(0.4f, 0.2f, 0.2f, 0.5f);
+                _originalBackgroundColor = _backgroundImage.color;
             }
         }
     }
@@ -270,6 +289,19 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         {
             Debug.LogWarning("Tried to set null monster in MonsterDisplay");
             return;
+        }
+        
+        // Cancel any active flash coroutine before switching monsters
+        if (_damageFlashCoroutine != null)
+        {
+            StopCoroutine(_damageFlashCoroutine);
+            _damageFlashCoroutine = null;
+            
+            // Reset the background color
+            if (_backgroundImage != null)
+            {
+                _backgroundImage.color = _originalBackgroundColor;
+            }
         }
         
         // Unsubscribe from previous monster events if any
@@ -336,8 +368,11 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
             _healthBar.value = health;
         }
         
-        // Visual feedback for damage
-        StartCoroutine(FlashDamage());
+        // Visual feedback for damage - only if health decreased
+        if (_monster != null && health < _monster.Health)
+        {
+            FlashDamage();
+        }
     }
     
     private void UpdateBlock(int block)
@@ -357,21 +392,64 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         }
     }
     
-    private IEnumerator FlashDamage()
+    // FIX: Improved damage flash with proper cleanup
+    private void FlashDamage()
+    {
+        // Cancel any existing flash coroutine
+        if (_damageFlashCoroutine != null)
+        {
+            StopCoroutine(_damageFlashCoroutine);
+        }
+        
+        // Start a new flash coroutine
+        _damageFlashCoroutine = StartCoroutine(DamageFlashEffect());
+    }
+    
+    // FIX: Complete coroutine that properly resets the background color
+    private IEnumerator DamageFlashEffect()
     {
         // Flash red when taking damage
-        Image background = GetComponent<Image>();
-        if (background == null)
+        if (_backgroundImage == null)
         {
+            _damageFlashCoroutine = null;
             yield break;
         }
         
-        Color originalColor = background.color;
-        background.color = new Color(0.8f, 0.2f, 0.2f, 0.8f);
+        // Store original color if not already stored
+        if (_originalBackgroundColor == Color.clear)
+        {
+            _originalBackgroundColor = _backgroundImage.color;
+        }
         
+        // Set to damage color (bright red)
+        _backgroundImage.color = new Color(0.8f, 0.2f, 0.2f, 0.8f);
+        
+        // Wait for flash duration
         yield return new WaitForSeconds(0.1f);
         
-        background.color = originalColor;
+        // Fade back to original color
+        float duration = 0.2f;
+        float elapsed = 0f;
+        
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            
+            _backgroundImage.color = Color.Lerp(
+                new Color(0.8f, 0.2f, 0.2f, 0.8f),
+                _originalBackgroundColor,
+                t
+            );
+            
+            yield return null;
+        }
+        
+        // Ensure we're set back to the original color
+        _backgroundImage.color = _originalBackgroundColor;
+        
+        // Clear the coroutine reference
+        _damageFlashCoroutine = null;
     }
     
     // Handle card dropping on monster
@@ -443,8 +521,17 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
         }
     }
     
+    // FIX: Improved cleanup in OnDestroy
     private void OnDestroy()
     {
+        // Cancel any active coroutines
+        if (_damageFlashCoroutine != null)
+        {
+            StopCoroutine(_damageFlashCoroutine);
+            _damageFlashCoroutine = null;
+        }
+        
+        // Unsubscribe from events
         if (_monster != null)
         {
             _monster.OnHealthChanged -= UpdateHealth;
@@ -456,5 +543,20 @@ public class MonsterDisplay : MonoBehaviour, IDropHandler
     public Monster GetMonster()
     {
         return _monster;
+    }
+    
+    // FIX: Method to directly set health display without triggering effects
+    public void SetHealthDisplay(int health, int maxHealth)
+    {
+        if (_healthText != null)
+        {
+            _healthText.text = $"HP: {health}/{maxHealth}";
+        }
+        
+        if (_healthBar != null)
+        {
+            _healthBar.maxValue = maxHealth;
+            _healthBar.value = health;
+        }
     }
 }

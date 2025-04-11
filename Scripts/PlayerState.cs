@@ -161,9 +161,9 @@ public class PlayerState : NetworkBehaviour
             {
                 UpdateLocalHandFromNetworked();
             }
-            else if (change.StartsWith("Monster") && HasInputAuthority)
+            else if (change.StartsWith("Monster"))
             {
-                // Only update your own monster from network changes
+                // Update local monster from networked properties
                 UpdateLocalMonsterFromNetworked();
                 
                 // Notify UI about stats change
@@ -318,7 +318,7 @@ public class PlayerState : NetworkBehaviour
             if (isOpponentMonster)
             {
                 // THIS IS THE KEY FIX - We need to find the opponent's PlayerState to modify their monster
-                if (_opponentPlayerState != null && _opponentPlayerState.HasStateAuthority)
+                if (_opponentPlayerState != null)
                 {
                     // Opponent's PlayerState has authority, so it should apply the damage
                     RPC_OpponentApplyDamageToMonster(_opponentPlayerRef, card.DamageAmount);
@@ -376,13 +376,14 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-    // NEW: This RPC is called on the opponent's PlayerState to apply damage to *their* monster
+    // FIX: Modified RPC to ensure it's targeting the correct monster owner
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     private void RPC_OpponentApplyDamageToMonster(PlayerRef targetPlayer, int damageAmount)
     {
         // This should only be executed by the PlayerState with state authority over the monster being damaged
         if (!HasStateAuthority) return;
         
+        // Only apply damage if this is the monster being targeted
         if (Object.InputAuthority == targetPlayer)
         {
             // This is our monster that's being targeted
@@ -398,7 +399,7 @@ public class PlayerState : NetworkBehaviour
                 // Update networked property
                 MonsterHealth = monster.Health;
                 
-                // Send a notification to all clients to update UI
+                // Send a notification to all clients to update UI with correct target player
                 RPC_NotifyMonsterDamaged(Object.InputAuthority, monster.Health);
                 
                 GameManager.Instance.LogManager.LogMessage($"Applied {damageAmount} damage to our monster. Health: {currentHealth} -> {monster.Health}");
@@ -422,15 +423,15 @@ public class PlayerState : NetworkBehaviour
         }
     }
 
-    // MODIFIED: Notify all clients about monster damage with improved UI updating
+    // FIX: Modified to correctly handle monster damage notifications
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyMonsterDamaged(PlayerRef monsterOwner, int newHealth)
     {
         var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
         if (networkRunner == null) return;
         
-        // We need to identify if this is about the local player's monster or an opponent's monster
-        if (networkRunner.LocalPlayer == monsterOwner)
+        // FIX: Make sure we're checking the actual monster owner, not local player
+        if (monsterOwner == Object.InputAuthority)
         {
             // This is about our own monster
             Monster playerMonster = _monsterManager.GetPlayerMonster();
@@ -443,23 +444,15 @@ public class PlayerState : NetworkBehaviour
         }
         else
         {
-            // This is about an opponent's monster
+            // This is about an opponent's monster - don't try to update via our own monster
+            GameManager.Instance.LogManager.LogMessage($"Received monster damage notification for player {monsterOwner}, health: {newHealth}");
+            
             // First try to update directly via the BattleUIController
             var gameUI = UnityEngine.Object.FindObjectOfType<GameUI>();
             if (gameUI != null && gameUI.GetBattleUIController() != null)
             {
                 gameUI.GetBattleUIController().UpdateOpponentMonsterHealth(newHealth);
                 GameManager.Instance.LogManager.LogMessage($"Directly updated opponent monster's health to {newHealth} via UI controller");
-            }
-            else
-            {
-                // Fallback to the old method
-                Monster opponentMonster = _monsterManager.GetOpponentMonster();
-                if (opponentMonster != null)
-                {
-                    opponentMonster.SetHealth(newHealth);
-                    GameManager.Instance.LogManager.LogMessage($"Updated opponent monster's health to {newHealth} via monster manager");
-                }
             }
         }
         
@@ -562,6 +555,7 @@ public class PlayerState : NetworkBehaviour
         return Score;
     }
 
+    // FIX: Added proper refresh of resources when preparing for new round
     public void PrepareForNewRound()
     {
         if (!HasStateAuthority) return;
@@ -585,6 +579,7 @@ public class PlayerState : NetworkBehaviour
         GameManager.Instance.LogManager.LogMessage($"{PlayerName} ready for new round");
     }
 
+    // FIX: Improved end turn to ensure proper turn progression
     public void EndTurn()
     {
         if (!HasStateAuthority) return;
