@@ -1,143 +1,105 @@
 using System;
 using System.Collections.Generic;
-using TMPro;
+using TMPro; // Still needed if you might add UI back later, otherwise removable
 using UnityEngine;
-using UnityEngine.UI;
+using UnityEngine.UI; // Still needed if you might add UI back later, otherwise removable
 
 public class LogManager : MonoBehaviour
 {
-    private TMP_Text _debugText;
+    // --- UI References Removed ---
+    // private TMP_Text _debugText;
+    // private RectTransform _debugRect;
+    // private GameObject _debugTextObject; // Keep track for potential destruction
+    // private GameObject _debugBackgroundObject; // Keep track for potential destruction
+
     private List<string> _logMessages = new List<string>();
-    private int _maxLogMessages = 20;
-    private RectTransform _debugRect;
-    
+    private int _maxLogMessages = 20; // Keep max messages for potential future UI use
+    private bool _isInitialized = false; // Flag to prevent double init
+
+
     public void Initialize()
     {
-        CreateDebugDisplay();
+        if (_isInitialized) return;
+
+        // CreateDebugDisplay(); // REMOVED Call to create UI
+        LogMessage("LogManager initialized (Debug UI Disabled)."); // Log to console
+        _isInitialized = true;
     }
-    
+
+    // --- UI Creation Method Removed ---
+    /*
     private void CreateDebugDisplay()
     {
-        // Add debug text to the UI canvas
-        // We'll create this early since other managers will log messages during initialization
-        Canvas canvas = FindAnyObjectByType<Canvas>();
-        if (canvas == null)
-        {
-            // Create a canvas for debug text if none exists yet
-            GameObject canvasObj = new GameObject("Debug Canvas");
-            canvas = canvasObj.AddComponent<Canvas>();
-            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvasObj.AddComponent<CanvasScaler>().uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            canvasObj.AddComponent<GraphicRaycaster>();
-            DontDestroyOnLoad(canvasObj);
-        }
-        
-        GameObject debugObj = new GameObject("Debug Text");
-        debugObj.transform.SetParent(canvas.transform, false);
-        _debugText = debugObj.AddComponent<TextMeshProUGUI>();
-        _debugText.text = "";
-        _debugText.fontSize = 12;
-        _debugText.alignment = TextAlignmentOptions.Left;
-        _debugText.color = Color.white;
-        _debugText.textWrappingMode = TextWrappingModes.Normal; // Updated from enableWordWrapping = true
-        _debugText.overflowMode = TextOverflowModes.Truncate; // Ensure text is truncated, not scrollable
-        
-        _debugRect = debugObj.GetComponent<RectTransform>();
-        _debugRect.anchorMin = new Vector2(0.01f, 0.01f);
-        _debugRect.anchorMax = new Vector2(0.4f, 0.25f);
-        _debugRect.offsetMin = Vector2.zero;
-        _debugRect.offsetMax = Vector2.zero;
-        
-        // Add a background panel to make text more readable
-        GameObject backgroundObj = new GameObject("Debug Background");
-        backgroundObj.transform.SetParent(canvas.transform, false);
-        backgroundObj.transform.SetSiblingIndex(debugObj.transform.GetSiblingIndex());
-        
-        Image background = backgroundObj.AddComponent<Image>();
-        background.color = new Color(0, 0, 0, 0.5f); // Semi-transparent black
-        
-        RectTransform bgRect = backgroundObj.GetComponent<RectTransform>();
-        bgRect.anchorMin = _debugRect.anchorMin;
-        bgRect.anchorMax = _debugRect.anchorMax;
-        bgRect.offsetMin = Vector2.zero;
-        bgRect.offsetMax = Vector2.zero;
-        
-        // Move the debug text on top of the background
-        debugObj.transform.SetAsLastSibling();
-        
-        LogMessage("LogManager initialized");
+        // ... Entire method removed ...
     }
-    
+    */
+
     public void LogMessage(string message)
     {
+        // Log to Unity console ALWAYS
         Debug.Log($"[GameManager] {message}");
-        
+
+        // Add to internal list (for potential future UI display or buffer)
         string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
         _logMessages.Add($"[{timestamp}] {message}");
-        
+
         // Keep log at reasonable size
         while (_logMessages.Count > _maxLogMessages)
             _logMessages.RemoveAt(0);
-            
-        UpdateDebugText();
+
+        // UpdateDebugText(); // REMOVED Call to update UI
     }
 
     public void LogError(string message)
     {
+        // Log to Unity console ALWAYS
         Debug.LogError($"[GameManager] {message}");
-        
+
+        // Add to internal list
         string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
         _logMessages.Add($"[{timestamp}] ERROR: {message}");
-        
+
         // Keep log at reasonable size
         while (_logMessages.Count > _maxLogMessages)
             _logMessages.RemoveAt(0);
-            
-        UpdateDebugText();
+
+        // UpdateDebugText(); // REMOVED Call to update UI
     }
 
+    // --- Debug Text Update Method Removed ---
+    /*
     private void UpdateDebugText()
     {
-        if (_debugText == null)
-            return;
-            
-        // Join all messages with newlines
-        string fullText = string.Join("\n", _logMessages);
-        _debugText.text = fullText;
-        
-        // Force a canvas update to get accurate text measurements
-        Canvas.ForceUpdateCanvases();
-        
-        // Check if text exceeds the available height
-        // We need to check the preferred height against the actual rect height
-        float availableHeight = _debugRect.rect.height;
-        float textHeight = _debugText.preferredHeight;
-        
-        // If text is too tall, remove oldest messages until it fits
-        while (textHeight > availableHeight && _logMessages.Count > 0)
-        {
-            // Remove the oldest message
-            _logMessages.RemoveAt(0);
-            
-            // Update text and recalculate height
-            fullText = string.Join("\n", _logMessages);
-            _debugText.text = fullText;
-            
-            // Force update to get new measurements
-            Canvas.ForceUpdateCanvases();
-            textHeight = _debugText.preferredHeight;
-        }
+        // if (_debugText == null) return;
+        // ... Logic to update _debugText.text removed ...
     }
-    
-    // Add this method to adjust the max visible messages
+    */
+
+    // This method might still be useful if you re-enable the UI later
     public void SetMaxMessages(int maxMessages)
     {
         _maxLogMessages = Mathf.Max(1, maxMessages); // Ensure at least 1 message
-        
-        // Trim existing messages if needed
+
+        // Trim existing messages if needed (affects internal buffer)
         while (_logMessages.Count > _maxLogMessages)
             _logMessages.RemoveAt(0);
-            
-        UpdateDebugText();
+        // UpdateDebugText(); // REMOVED Call to update UI
     }
+
+     // --- ADDED Cleanup ---
+     // Optional: If you want to be extra sure no old UI elements remain
+     public void DestroyDebugUI()
+     {
+         // Find potentially existing objects by name if needed and destroy them
+         GameObject existingText = GameObject.Find("Debug Text");
+         if (existingText != null) Destroy(existingText);
+
+         GameObject existingBg = GameObject.Find("Debug Background");
+         if (existingBg != null) Destroy(existingBg);
+     }
+
+     // Example usage if needed during cleanup:
+     // private void OnDestroy() {
+     //     DestroyDebugUI();
+     // }
 }

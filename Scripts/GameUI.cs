@@ -5,10 +5,10 @@ using UnityEngine;
 using UnityEngine.UI;
 using Fusion; // Added for PlayerRef
 
-public class GameUI : MonoBehaviour
+public class GameUI : MonoBehaviour // GameUI should be a MonoBehaviour to manage its own lifecycle and coroutines
 {
     // Core UI components
-    private Canvas _gameCanvas;
+    private Canvas _gameCanvas; // Canvas specifically for Game UI elements
 
     // UI controllers
     private GameUILayout _layoutManager;
@@ -26,17 +26,17 @@ public class GameUI : MonoBehaviour
     private bool _initializationInProgress = false;
     private float _initRetryInterval = 0.5f;
     private int _maxInitRetries = 20;
-
     // Flag to prevent double cleanup
     private bool _cleanedUp = false;
-
 
     // Called by GameInitializer
     public void Initialize()
     {
+        // This method is called by GameInitializer, which is a MonoBehaviour.
+        // GameUI itself should also be a MonoBehaviour to handle its UI elements properly.
         if (_initialized || _initializationInProgress) return;
         GameManager.Instance?.LogManager?.LogMessage("Starting GameUI initialization...");
-        StartCoroutine(InitializeWithRetry());
+        StartCoroutine(InitializeWithRetry()); // Start coroutine on this MonoBehaviour
     }
 
     private IEnumerator InitializeWithRetry()
@@ -46,11 +46,9 @@ public class GameUI : MonoBehaviour
 
         while (retryCount < _maxInitRetries)
         {
-            // *** FIXED: Access Runner via NetworkManager ***
+            // Access Runner via NetworkManager
             NetworkRunner runner = GameManager.Instance?.NetworkManager?.GetRunner();
-
             // Wait for GameState and NetworkRunner
-            // Check GameState first as PlayerState depends on it
             if (GameState.Instance == null || !GameState.Instance.IsSpawned() || runner == null || !runner.IsRunning)
             {
                 // GameManager.Instance?.LogManager?.LogMessage($"GameUI Init: Waiting for GameState/Runner ({retryCount+1}/{_maxInitRetries})");
@@ -59,11 +57,11 @@ public class GameUI : MonoBehaviour
                 continue;
             }
 
-            // Get local player state using GameState instance (which requires a runner)
+            // Get local player state using GameState instance
             _localPlayerState = GameState.Instance.GetLocalPlayerState();
-            if (_localPlayerState == null)
+            if (_localPlayerState == null || !_localPlayerState.Object.IsValid) // Also check if state object is valid
             {
-                // GameManager.Instance?.LogManager?.LogMessage($"GameUI Init: LocalPlayerState not available yet, retrying ({retryCount+1}/{_maxInitRetries})");
+                // GameManager.Instance?.LogManager?.LogMessage($"GameUI Init: LocalPlayerState not available/valid yet, retrying ({retryCount+1}/{_maxInitRetries})");
                 retryCount++;
                 yield return new WaitForSeconds(_initRetryInterval);
                 continue;
@@ -72,34 +70,33 @@ public class GameUI : MonoBehaviour
             // --- Initialization successful ---
             GameManager.Instance?.LogManager?.LogMessage("GameUI: GameState and LocalPlayerState available, proceeding with initialization.");
 
-            // Create game canvas and layout
+            // Create or find the game canvas *FIRST*
             CreateGameCanvas();
-             if (_gameCanvas == null) // Ensure canvas was created/found
+            if (_gameCanvas == null)
              {
                  GameManager.Instance?.LogManager?.LogError("GameUI: Failed to create or find game canvas. Aborting initialization.");
                  _initializationInProgress = false;
-                 yield break;
+                 yield break; // Stop if canvas fails
              }
+
+            // Create layout manager using the game canvas transform
             _layoutManager = new GameUILayout(_gameCanvas.transform);
 
-            // Initialize UI controllers with required references
+            // Initialize UI controllers with required references, parenting them under the correct layout panels
             _playerUIController = new PlayerUIController(_layoutManager.GetStatsPanel(), _localPlayerState);
             _battleUIController = new BattleUIController(_layoutManager.GetBattlePanel(), _layoutManager.GetPlayerMonsterPanel(), _localPlayerState);
-            _handUIController = new HandUIController(_layoutManager.GetHandPanel(), _gameCanvas, _localPlayerState);
+            _handUIController = new HandUIController(_layoutManager.GetHandPanel(), _gameCanvas, _localPlayerState); // Hand needs main canvas for drag overlay
             _turnInfoUIController = new TurnInfoUIController(_layoutManager.GetTurnInfoPanel(), _localPlayerState);
             _opponentsUIController = new OpponentsUIController(_layoutManager.GetOpponentsPanel());
 
             // Subscribe to necessary events
             SubscribeToEvents();
 
-            // Wait briefly before the first full UI update
-            yield return new WaitForSeconds(0.2f);
-
             // Initial UI update based on current state
             UpdateAllUI();
 
             // Hide lobby UI elements managed by UIManager
-            HideLobbyUI();
+            HideLobbyUI(); // Call the method to hide UIManager's elements
 
             _initialized = true;
             _initializationInProgress = false;
@@ -113,71 +110,121 @@ public class GameUI : MonoBehaviour
         _initializationInProgress = false;
     }
 
-    private void CreateGameCanvas()
+     private void CreateGameCanvas()
     {
-        // Check if a canvas already exists (e.g., from UIManager)
-        Canvas existingCanvas = FindObjectOfType<Canvas>();
-        if (existingCanvas != null && existingCanvas.renderMode == RenderMode.ScreenSpaceOverlay) // Accept any ScreenSpace Overlay canvas
+        // 1. Check if we already have a reference from a previous initialization
+        if (_gameCanvas != null && _gameCanvas.gameObject != null)
         {
-            _gameCanvas = existingCanvas;
-            // GameManager.Instance?.LogManager?.LogMessage("GameUI: Using existing ScreenSpace Overlay Canvas.");
-        }
-        else
-        {
-            // Create main canvas for game UI if none suitable exists
-            GameObject canvasObj = new GameObject("GameUICanvas"); // Specific name
-            _gameCanvas = canvasObj.AddComponent<Canvas>();
-            _gameCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            _gameCanvas.sortingOrder = 10; // Ensure it's above other UI if needed
-
-            CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
-            scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-            scaler.referenceResolution = new Vector2(1920, 1080);
-            scaler.matchWidthOrHeight = 0.5f;
-
-            canvasObj.AddComponent<GraphicRaycaster>(); // Essential for UI interactions
-
-            // Make sure it persists if created dynamically here
-            // Only call DontDestroyOnLoad if this script manages its lifecycle fully
-             // DontDestroyOnLoad(canvasObj);
-             // GameManager.Instance?.LogManager?.LogMessage("GameUI: Created new Game canvas.");
+            GameManager.Instance.LogManager.LogMessage("GameUI reusing existing _gameCanvas reference.");
+             _gameCanvas.gameObject.SetActive(true); // Ensure it's active
+            return;
         }
 
+        // 2. If no reference, try finding an *existing* GameObject named "GameUICanvas"
+        GameObject existingCanvasObj = GameObject.Find("GameUICanvas");
+        if (existingCanvasObj != null)
+        {
+            _gameCanvas = existingCanvasObj.GetComponent<Canvas>();
+            if (_gameCanvas != null)
+            {
+                 GameManager.Instance.LogManager.LogMessage("GameUI found existing 'GameUICanvas' GameObject.");
+                 _gameCanvas.gameObject.SetActive(true); // Ensure it's active
+                 // Optionally ensure DontDestroyOnLoad if necessary, though GameInitializer might handle lifecycle
+                 // DontDestroyOnLoad(_gameCanvas.gameObject);
+                 return;
+            }
+             else {
+                  GameManager.Instance.LogManager.LogError("Found 'GameUICanvas' GameObject but it lacks a Canvas component!");
+                  // Proceed to create a new one
+             }
+        }
+
+        // 3. If still no canvas, create a new one
+        GameManager.Instance.LogManager.LogMessage("GameUI creating new GameUICanvas.");
+        GameObject canvasObj = new GameObject("GameUICanvas"); // Use a specific name
+        // canvasObj.tag = "GameCanvas"; // REMOVED Tag usage
+
+        _gameCanvas = canvasObj.AddComponent<Canvas>(); // Assign to instance variable
+        _gameCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        _gameCanvas.sortingOrder = 10; // Ensure it renders above potential lobby UI (sortingOrder 0)
+
+        CanvasScaler scaler = canvasObj.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1920, 1080);
+        scaler.matchWidthOrHeight = 0.5f;
+
+        canvasObj.AddComponent<GraphicRaycaster>(); // Essential for UI interactions
+
+        // Decide lifecycle - often GameUI is destroyed when returning to lobby/menu
+        // DontDestroyOnLoad(canvasObj); // Only use if GameUI should persist across scenes independently
+
+         _gameCanvas.gameObject.SetActive(true); // Make sure it's active
     }
+
 
     private void SubscribeToEvents()
     {
         // Subscribe to PlayerState LOCAL events for the local player
-        PlayerState.OnStatsChanged += HandlePlayerStatsChanged;
-        PlayerState.OnHandChanged += HandleLocalHandChanged;
-        PlayerState.OnPlayerMonsterChanged += HandlePlayerMonsterChanged;
-        PlayerState.OnOpponentMonsterChanged += HandleOpponentMonsterChanged;
-        PlayerState.OnLocalTurnStateChanged += HandleLocalTurnStateChanged;
-        PlayerState.OnLocalFightOver += HandleLocalFightOver;
+        if (_localPlayerState != null) // Check if state is valid before subscribing
+        {
+            PlayerState.OnStatsChanged -= HandlePlayerStatsChanged; // Prevent duplicates
+            PlayerState.OnStatsChanged += HandlePlayerStatsChanged;
 
+            PlayerState.OnHandChanged -= HandleLocalHandChanged;
+            PlayerState.OnHandChanged += HandleLocalHandChanged;
+
+            PlayerState.OnPlayerMonsterChanged -= HandlePlayerMonsterChanged;
+            PlayerState.OnPlayerMonsterChanged += HandlePlayerMonsterChanged;
+
+            PlayerState.OnOpponentMonsterChanged -= HandleOpponentMonsterChanged;
+            PlayerState.OnOpponentMonsterChanged += HandleOpponentMonsterChanged;
+
+            PlayerState.OnLocalTurnStateChanged -= HandleLocalTurnStateChanged;
+            PlayerState.OnLocalTurnStateChanged += HandleLocalTurnStateChanged;
+
+            PlayerState.OnLocalFightOver -= HandleLocalFightOver;
+            PlayerState.OnLocalFightOver += HandleLocalFightOver;
+        } else {
+             GameManager.Instance?.LogManager?.LogError("GameUI: Cannot subscribe to PlayerState events - localPlayerState is null!");
+        }
 
         // Subscribe to GameState global events
-        GameState.OnRoundChanged += HandleRoundChanged;
-        GameState.OnPlayerStateAdded += HandlePlayerStateAdded; // For opponent UI
-        GameState.OnPlayerStateRemoved += HandlePlayerStateRemoved; // For opponent UI
-        GameState.OnPlayerFightCompletionUpdated += HandlePlayerFightCompletionUpdated; // For opponent UI status
+         if (GameState.Instance != null) // Check if GameState exists
+         {
+            GameState.OnRoundChanged -= HandleRoundChanged; // Prevent duplicates
+            GameState.OnRoundChanged += HandleRoundChanged;
+
+            GameState.OnPlayerStateAdded -= HandlePlayerStateAdded;
+            GameState.OnPlayerStateAdded += HandlePlayerStateAdded;
+
+            GameState.OnPlayerStateRemoved -= HandlePlayerStateRemoved;
+            GameState.OnPlayerStateRemoved += HandlePlayerStateRemoved;
+
+            GameState.OnPlayerFightCompletionUpdated -= HandlePlayerFightCompletionUpdated;
+            GameState.OnPlayerFightCompletionUpdated += HandlePlayerFightCompletionUpdated;
+         } else {
+             GameManager.Instance?.LogManager?.LogError("GameUI: Cannot subscribe to GameState events - GameState.Instance is null!");
+         }
 
 
         // Subscribe to events from our OWN UI controllers
         if (_turnInfoUIController != null)
         {
-            _turnInfoUIController.OnEndTurnClicked += HandleEndTurnClicked;
+             _turnInfoUIController.OnEndTurnClicked -= HandleEndTurnClicked; // Prevent duplicates
+             _turnInfoUIController.OnEndTurnClicked += HandleEndTurnClicked;
         }
         if (_handUIController != null)
         {
-            _handUIController.OnCardPlayedRequested += HandleCardPlayedRequested;
+             _handUIController.OnCardPlayedRequested -= HandleCardPlayedRequested; // Prevent duplicates
+             _handUIController.OnCardPlayedRequested += HandleCardPlayedRequested;
         }
 
-        // GameManager.Instance?.LogManager?.LogMessage("GameUI subscribed to events.");
+        GameManager.Instance?.LogManager?.LogMessage("GameUI subscribed to events.");
     }
 
     private void UnsubscribeFromEvents()
     {
+        // Unsubscribe from PlayerState events
         PlayerState.OnStatsChanged -= HandlePlayerStatsChanged;
         PlayerState.OnHandChanged -= HandleLocalHandChanged;
         PlayerState.OnPlayerMonsterChanged -= HandlePlayerMonsterChanged;
@@ -194,7 +241,7 @@ public class GameUI : MonoBehaviour
             GameState.OnPlayerFightCompletionUpdated -= HandlePlayerFightCompletionUpdated;
         }
 
-
+        // Unsubscribe from local UI controllers
         if (_turnInfoUIController != null)
         {
             _turnInfoUIController.OnEndTurnClicked -= HandleEndTurnClicked;
@@ -203,7 +250,7 @@ public class GameUI : MonoBehaviour
         {
             _handUIController.OnCardPlayedRequested -= HandleCardPlayedRequested;
         }
-        // GameManager.Instance?.LogManager?.LogMessage("GameUI unsubscribed from events.");
+        GameManager.Instance?.LogManager?.LogMessage("GameUI unsubscribed from events.");
     }
 
     // --- Event Handlers ---
@@ -216,11 +263,13 @@ public class GameUI : MonoBehaviour
         {
             _playerUIController?.UpdateStats(playerState);
         }
-        else
+        else if (_opponentsUIController != null && _localPlayerState != null && playerState.Object != null && playerState.Object.InputAuthority == _localPlayerState.GetOpponentPlayerRef()) // Check opponent ref
         {
             _opponentsUIController?.UpdateOpponentStats(playerState);
         }
+        // Could potentially update other opponents if the UI shows more than one
     }
+
 
     private void HandleLocalHandChanged(PlayerState playerState, List<CardData> hand)
     {
@@ -257,9 +306,12 @@ public class GameUI : MonoBehaviour
         if(isFightOver && _turnInfoUIController != null)
         {
             _turnInfoUIController.UpdateTurnState(false); // Show inactive state
-            // TODO: Update turn info text to "Fight Over" or similar via TurnInfoUIController method
+             // TODO: Update turn info text to "Fight Over" or similar via TurnInfoUIController method
+            // _turnInfoUIController.SetFightStatusText("Fight Over!");
         }
+         // Optionally re-enable turn UI if fight ends and a new round starts (handled by HandleRoundChanged/PrepareForNewRound)
     }
+
 
     private void HandleRoundChanged(int round)
     {
@@ -268,22 +320,29 @@ public class GameUI : MonoBehaviour
         _battleUIController?.ResetCachedHealth(); // Reset visual health tracking for new opponent
     }
 
+     // Called by GameState event when ANY PlayerState is added
     private void HandlePlayerStateAdded(PlayerRef playerRef, PlayerState playerState)
     {
-        if (!_initialized || playerState == null) return;
-        // Add to opponent display if it's not the local player
-        if (playerRef != _localPlayerState?.Object?.InputAuthority)
+        if (!_initialized || playerState == null || _localPlayerState == null || _localPlayerState.Object == null) return; // Added null check for localPlayerState.Object
+        // Add to opponent display if it's NOT the local player
+        if (playerRef != _localPlayerState.Object.InputAuthority)
         {
             _opponentsUIController?.AddOpponentDisplay(playerRef, playerState);
         }
+         // Update our own UI in case our opponent assignment changed etc.
+         UpdateAllUI();
     }
 
+     // Called by GameState event when ANY PlayerState is removed
     private void HandlePlayerStateRemoved(PlayerRef playerRef, PlayerState playerState)
     {
         if (!_initialized) return;
-        // Remove from opponent display if it's not the local player
-        // (Technically removing local player state might error elsewhere, but OpponentsUI should handle it)
+        // Remove from opponent display
         _opponentsUIController?.RemoveOpponentDisplay(playerRef);
+         // If the removed player was our opponent, update our UI
+         if(_localPlayerState != null && playerRef == _localPlayerState.GetOpponentPlayerRef()) {
+             UpdateAllUI(); // Re-render to potentially show no opponent
+         }
     }
 
     // Handles updates to any player's fight completion status
@@ -291,7 +350,6 @@ public class GameUI : MonoBehaviour
     {
         if (!_initialized) return;
         // Update opponent UI to show waiting status, etc.
-        // *** Assuming OpponentsUIController will have this method added ***
         _opponentsUIController?.UpdateOpponentFightStatus(playerRef, isComplete);
     }
 
@@ -307,39 +365,69 @@ public class GameUI : MonoBehaviour
     private void HandleCardPlayedRequested(CardDisplay display, GameObject target)
     {
         if (!_initialized || _localPlayerState == null || display == null || target == null) return;
-
         CardData card = display.GetCardData();
         int cardIndex = display.GetCardIndex();
         MonsterDisplay monsterDisplay = target.GetComponent<MonsterDisplay>();
-        Monster targetMonster = monsterDisplay?.GetMonster(); // Get the LOCAL monster representation
+        Monster targetMonster = monsterDisplay?.GetMonster();
 
-        if (monsterDisplay == null) // Target wasn't a monster display
-        {
-             // If card targets self and wasn't dropped on own monster, target self implicitly
-             if(card.Target == CardTarget.Self)
-             {
-                  targetMonster = _localPlayerState.GetMonster();
+         // Determine if the target is the player's own monster or the opponent's representation
+         Monster ownMonster = _localPlayerState.GetMonster();
+         Monster opponentMonster = _localPlayerState.GetOpponentMonster(); // Get the local representation
+         bool isTargetingOwn = (monsterDisplay != null && monsterDisplay.IsPlayerMonster());
+         bool isTargetingOpponent = (monsterDisplay != null && !monsterDisplay.IsPlayerMonster());
+
+
+         // If the drop target wasn't a monster display, infer target based on card type
+         if (monsterDisplay == null) {
+             if (card.Target == CardTarget.Self) {
+                 targetMonster = ownMonster;
+                 isTargetingOwn = true;
+                 isTargetingOpponent = false;
+                 GameManager.Instance?.LogManager?.LogMessage($"Card {card.Name} targets self, applying to player monster.");
+             } else if (card.Target == CardTarget.Enemy || card.Target == CardTarget.AllEnemies) {
+                  targetMonster = opponentMonster; // Use the representation
+                  isTargetingOwn = false;
+                  isTargetingOpponent = true; // Mark as targeting opponent contextually
+                  GameManager.Instance?.LogManager?.LogMessage($"Card {card.Name} targets enemy, applying to opponent monster representation.");
+             } else {
+                  // Card might not need a monster target (e.g. Draw Card)
+                  GameManager.Instance?.LogManager?.LogMessage($"Card {card.Name} played without monster target. Applying effects to player state.");
+                  // Let PlayCardLocally handle non-monster effects
+                  targetMonster = null; // Indicate no specific monster target
              }
-        }
+         } else {
+             // Use the monster from the display that was hit
+              targetMonster = monsterDisplay.GetMonster();
+         }
 
-        if (targetMonster != null)
-        {
-            _localPlayerState.PlayCardLocally(cardIndex, targetMonster);
-            _battleUIController?.PlayCardEffect(card, target); // Play visual effect immediately
-        }
-        // else { GameManager.Instance?.LogManager?.LogMessage($"GameUI: Could not determine valid monster target for card {card.Name}. Play cancelled."); }
+
+         // Call PlayerState's method to handle the play logic (energy check, RPCs, effects)
+         if (targetMonster != null || (card.Target != CardTarget.Self && card.Target != CardTarget.Enemy && card.Target != CardTarget.AllEnemies && card.Target != CardTarget.All)) // Allow play if target is valid OR card doesn't strictly need a monster
+         {
+             _localPlayerState.PlayCardLocally(cardIndex, targetMonster);
+             // Play visual effect immediately if target is a valid GameObject
+             if (target != null && monsterDisplay != null) // Ensure target has a visual representation
+             {
+                 _battleUIController?.PlayCardEffect(card, target);
+             }
+         } else {
+             GameManager.Instance?.LogManager?.LogMessage($"GameUI: Could not determine valid target for card {card.Name}. Play cancelled.");
+         }
     }
+
 
     // Hides UI elements managed by UIManager (Connect/Lobby)
     private void HideLobbyUI()
     {
-        GameManager.Instance?.UIManager?.HideAllUI();
+        // Call the appropriate method on UIManager instance
+        GameManager.Instance?.UIManager?.HideLobbyAndConnectUI();
     }
 
     // Updates all major UI components based on the current local player state
     private void UpdateAllUI()
     {
-        if (!_initialized || _localPlayerState == null) return;
+        if (!_initialized || _localPlayerState == null || !_localPlayerState.Object.IsValid) return; // Added validity check
+
         try
         {
             _playerUIController?.UpdateStats(_localPlayerState);
@@ -356,18 +444,10 @@ public class GameUI : MonoBehaviour
             else // Fallback if GameState not ready
             {
                 _turnInfoUIController?.UpdateRoundInfo(1);
-                _turnInfoUIController?.UpdateTurnState(false);
+                _turnInfoUIController?.UpdateTurnState(false); // Assume not player's turn if GameState is missing
             }
         }
-        catch (System.Exception ex) { GameManager.Instance?.LogManager?.LogError($"Error updating UI in UpdateAllUI: {ex.Message}\n{ex.StackTrace}"); }
-    }
-
-    private void Update()
-    {
-        if (!_initialized && !_initializationInProgress && GameManager.Instance != null)
-        {
-            if (GameState.Instance != null && GameState.Instance.IsSpawned()) Initialize();
-        }
+        catch (System.Exception ex) { GameManager.Instance?.LogManager?.LogError($"Error updating UI in GameUI.UpdateAllUI: {ex.Message}\n{ex.StackTrace}"); }
     }
 
     public BattleUIController GetBattleUIController() => _battleUIController;
@@ -376,9 +456,15 @@ public class GameUI : MonoBehaviour
     {
         if (!_cleanedUp)
         {
-            // GameManager.Instance?.LogManager?.LogMessage("GameUI OnDestroy called. Cleaning up...");
+            GameManager.Instance?.LogManager?.LogMessage("GameUI OnDestroy called. Cleaning up...");
             UnsubscribeFromEvents();
             _handUIController?.Cleanup(); // Call cleanup on HandUIController
+
+            // Optionally destroy the canvas if this GameUI owned it
+            // if (_gameCanvas != null) {
+            //    Destroy(_gameCanvas.gameObject);
+            //}
+
             _cleanedUp = true;
         }
     }

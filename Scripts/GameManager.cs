@@ -17,10 +17,11 @@ public class GameManager : MonoBehaviour
     [HideInInspector] public LobbyManager LobbyManager { get; private set; }
     [HideInInspector] public GameInitializer GameInitializer { get; private set; }
 
-    // Reference to GameState prefab
-    private NetworkObject _gameStatePrefab;
-    // Flag to prevent multiple spawn attempts
-    private bool _gameStateSpawnInitiated = false;
+    // Reference to GameState prefab (REMOVED - NetworkManager handles prefab loading/spawning)
+    // private NetworkObject _gameStatePrefab;
+
+    // Flag to prevent multiple spawn attempts (REMOVED - Not needed here anymore)
+    // private bool _gameStateSpawnInitiated = false;
 
     // Game state flag
     private bool _isGameStartingOrStarted = false;
@@ -41,7 +42,7 @@ public class GameManager : MonoBehaviour
         UIManager = gameObject.AddComponent<UIManager>();
         GameInitializer = gameObject.AddComponent<GameInitializer>();
 
-        LoadGameStatePrefab();
+        // LoadGameStatePrefab(); // REMOVED - NetworkManager handles this
         LogManager.LogMessage("GameManager Singleton Initialized");
     }
 
@@ -57,14 +58,10 @@ public class GameManager : MonoBehaviour
         LogManager.LogMessage("All managers initialized.");
     }
 
-    private void LoadGameStatePrefab()
-    {
-        if (_gameStatePrefab != null) return;
-        _gameStatePrefab = Resources.Load<NetworkObject>("GameStatePrefab");
-        if (_gameStatePrefab == null) LogManager.LogError("GameStatePrefab not found in Resources folder! Critical Error.");
-        else LogManager.LogMessage("GameStatePrefab loaded successfully.");
-    }
+    // REMOVED LoadGameStatePrefab() - NetworkManager handles loading
 
+    // This method is now called by LobbyManager when the lobby phase is complete.
+    // It assumes GameState ALREADY exists.
     public void StartGame()
     {
         if (_isGameStartingOrStarted)
@@ -72,120 +69,109 @@ public class GameManager : MonoBehaviour
             LogManager.LogMessage("Game is already starting or started. Ignoring duplicate StartGame call.");
             return;
         }
-        LogManager.LogMessage("GameManager: StartGame called!");
+        LogManager.LogMessage("GameManager: StartGame called (triggered by Lobby/Debug).");
         _isGameStartingOrStarted = true;
-        _gameStateSpawnInitiated = false;
+        // _gameStateSpawnInitiated = false; // Flag removed
+
+        // Directly start the GameInitializer sequence.
+        // We ASSUME GameState has already been spawned by NetworkManager earlier.
         StartCoroutine(GameStartupSequence());
     }
 
     private IEnumerator GameStartupSequence()
     {
         LogManager.LogMessage("GameStartupSequence: Starting...");
-        yield return StartCoroutine(EnsureGameStateSpawned());
 
-        if (GameState.Instance == null)
+        // --- Step 1: Verify GameState Exists ---
+        // Add a check here to ensure GameState is indeed ready before proceeding.
+        if (GameState.Instance == null || !GameState.Instance.IsSpawned())
         {
-            LogManager.LogError("GameStartupSequence failed: GameState could not be spawned or found.");
-            _isGameStartingOrStarted = false;
-            yield break;
+             LogManager.LogError("GameStartupSequence ERROR: GameState is not valid or spawned! Cannot start game logic.");
+             _isGameStartingOrStarted = false; // Allow trying again
+             // TODO: Handle this failure (e.g., return to lobby, show error)
+             yield break;
         }
-        LogManager.LogMessage("GameStartupSequence: GameState is ready.");
+         LogManager.LogMessage("GameStartupSequence: GameState verified.");
 
+
+        // --- Step 2: Hand off to GameInitializer ---
+        // GameInitializer will wait for PlayerState registration etc.
         LogManager.LogMessage("GameStartupSequence: Initializing GameInitializer...");
         GameInitializer.InitializeGame();
         LogManager.LogMessage("GameStartupSequence: Handed off to GameInitializer.");
+        yield return null; // Ensure coroutine doesn't end immediately
     }
 
-    private IEnumerator EnsureGameStateSpawned()
+    // This coroutine is now just a utility function to WAIT for GameState,
+    // it no longer attempts to spawn it. It might be called by GameInitializer
+    // or other systems if they need to explicitly wait.
+    public IEnumerator EnsureGameStateSpawned() // Renamed slightly
     {
-        LogManager.LogMessage("EnsureGameStateSpawned: Starting check/spawn process...");
+        LogManager.LogMessage("EnsureGameStateReady: Waiting for GameState.Instance...");
+        NetworkRunner runner = NetworkManager?.GetRunner();
 
-        // --- Check 1: Is GameState already spawned? ---
-        // *** Line ~105 Error Fix: Access .IsSpawned as property ***
-        if (GameState.Instance != null && GameState.Instance.IsSpawned)
+        // --- Validate Runner ---
+        if (runner == null || !runner.IsRunning)
         {
-            LogManager.LogMessage("EnsureGameStateSpawned: GameState already exists and is spawned.");
-            _gameStateSpawnInitiated = true;
-            yield break;
+            LogManager.LogError("EnsureGameStateReady: NetworkRunner is null or not running!");
+            yield break; // Cannot proceed
         }
 
-        // --- Check 2: Has spawn been initiated but not completed? ---
-        if (_gameStateSpawnInitiated)
-        {
-            LogManager.LogMessage("EnsureGameStateSpawned: GameState spawn already initiated, waiting...");
-        }
-        // --- Check 3: Initiate spawn if needed and possible ---
-        else
-        {
-            if (_gameStatePrefab == null) { LogManager.LogError("EnsureGameStateSpawned: GameStatePrefab is null!"); yield break; }
-
-            NetworkRunner runner = NetworkManager?.GetRunner();
-            if (runner == null || !runner.IsRunning) { LogManager.LogError("EnsureGameStateSpawned: NetworkRunner is not running!"); yield break; }
-
-            if (runner.IsServer || runner.IsSharedModeMasterClient)
-            {
-                LogManager.LogMessage("EnsureGameStateSpawned: Conditions met, attempting to spawn GameState (Authority).");
-                try
-                {
-                    runner.Spawn(_gameStatePrefab, Vector3.zero, Quaternion.identity, null);
-                    _gameStateSpawnInitiated = true;
-                    LogManager.LogMessage("EnsureGameStateSpawned: GameState spawn command issued.");
-                }
-                catch (System.Exception ex) { LogManager.LogError($"EnsureGameStateSpawned: Failed to spawn GameState: {ex.Message}"); yield break; }
-            }
-            else
-            {
-                LogManager.LogMessage("EnsureGameStateSpawned: Not State Authority. Will wait for GameState.");
-                _gameStateSpawnInitiated = true;
-            }
-        }
-
-        // --- Check 4: Wait for instance to become valid and spawned ---
+        // --- Wait for instance to become valid and spawned ---
         float timer = 0f;
-        float timeout = 15f;
-        // *** Line ~147 Error Fix: Access .IsSpawned as property ***
-        while (GameState.Instance == null || !GameState.Instance.IsSpawned)
+        float timeout = 20f;
+        while (GameState.Instance == null || !GameState.Instance.IsSpawned()) // Check IsSpawned property
         {
+             // Re-check runner status during wait
+             if (!runner.IsRunning)
+             {
+                 LogManager.LogError("EnsureGameStateReady: NetworkRunner stopped while waiting for GameState.");
+                 yield break;
+             }
+
             timer += Time.deltaTime;
             if (timer > timeout)
             {
-                LogManager.LogError("EnsureGameStateSpawned: Timed out waiting for GameState.Instance to become valid and spawned.");
-                yield break;
+                LogManager.LogError($"EnsureGameStateReady: Timed out ({timeout}s) waiting for GameState.Instance. Instance: {GameState.Instance}, IsSpawned: {GameState.Instance?.IsSpawned()}.");
+                yield break; // Stop waiting on timeout
             }
-            yield return null;
+            yield return null; // Wait for the next frame
         }
-        LogManager.LogMessage($"EnsureGameStateSpawned: GameState.Instance is valid and spawned (ID: {GameState.Instance.Id}).");
+
+        LogManager.LogMessage($"EnsureGameStateReady: GameState.Instance is valid and spawned (ID: {GameState.Instance.Id}).");
     }
+
 
     // Public method to check game status
     public bool IsGameStarted()
     {
-        // *** Line ~165 Error Fix: Access .IsGameActive as property ***
-        return GameState.Instance != null ? GameState.Instance.IsGameActive : _isGameStartingOrStarted;
+        // Use the IsGameActive property from the GameState if available, otherwise fallback
+        return GameState.Instance != null && GameState.Instance.IsSpawned() ?
+             GameState.Instance.IsGameActive() : _isGameStartingOrStarted;
     }
 
     public void EndGame()
     {
-        if (!_isGameStartingOrStarted) return;
+        if (!_isGameStartingOrStarted) return; // Only end if started/starting
         LogManager.LogMessage("Game is ending!");
 
-        _isGameStartingOrStarted = false;
-        _gameStateSpawnInitiated = false;
+        _isGameStartingOrStarted = false; // Reset game state flag
 
+        // Cleanup game initializer systems (UI, etc.)
         GameInitializer?.CleanupGame();
 
         NetworkRunner runner = NetworkManager?.GetRunner();
-        // *** Line ~181 Error Fix: Access .IsSpawned as property ***
-        // Combined checks carefully
-        if (runner != null && runner.IsRunning &&
-            (runner.IsServer || runner.IsSharedModeMasterClient) &&
-            GameState.Instance != null && GameState.Instance.Object != null &&
-            GameState.Instance.IsSpawned) // Check IsSpawned as property
+
+        // --- Despawn GameState only if Authority ---
+         if (runner != null && runner.IsRunning &&
+             (runner.IsServer || runner.IsSharedModeMasterClient) && // Check authority
+             GameState.Instance != null && GameState.Instance.Object != null &&
+             GameState.Instance.IsSpawned()) // Check IsSpawned property
         {
-            LogManager.LogMessage("Authority despawning GameState.");
+             LogManager.LogMessage("Authority despawning GameState.");
             runner.Despawn(GameState.Instance.Object);
         }
-
+        // Reset Lobby and show Connect UI
         LobbyManager?.Reset();
         UIManager?.ShowConnectUI();
     }
