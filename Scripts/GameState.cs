@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using Fusion;
 using UnityEngine;
 
-// This class handles the networked game state
+// This class handles the networked game state: Rounds, Matchups, Fight Completion, Draft Phase
 public class GameState : NetworkBehaviour
 {
     // Singleton instance - only valid when spawned
@@ -15,682 +15,442 @@ public class GameState : NetworkBehaviour
     [Networked] public int CurrentRound { get; set; }
     [Networked] public NetworkBool DraftPhaseActive { get; set; }
     [Networked] public NetworkBool GameActive { get; set; }
-    [Networked] public NetworkBool RoundComplete { get; set; }
-    
     [Networked] public int RoundsToWin { get; set; }
 
-    // Dictionary to track active turns per player
-    // We can't directly network a dictionary, so we'll use RPCs to sync this
-    private Dictionary<PlayerRef, bool> _isPlayerTurn = new Dictionary<PlayerRef, bool>();
-    private Dictionary<PlayerRef, bool> _isMonsterTurn = new Dictionary<PlayerRef, bool>();
-    
-    // Dictionary to track player turn counts
-    private Dictionary<PlayerRef, int> _playerTurnCount = new Dictionary<PlayerRef, int>();
-    
-    // For global round tracking - will only advance when all players trigger a round completion
-    private Dictionary<PlayerRef, bool> _hasCompletedRound = new Dictionary<PlayerRef, bool>();
-    private int _playersCompletedThisRound = 0;
+    // --- Fight Completion Tracking ---
+    // This dictionary is managed locally on the State Authority and synced via RPCs
+    // Key: PlayerRef, Value: bool (true if fight is complete for the round)
+    private Dictionary<PlayerRef, bool> _playerFightCompletion = new Dictionary<PlayerRef, bool>();
 
-    // Events
-    public static event Action<int> OnRoundChanged;
-    public static event Action<bool> OnDraftPhaseChanged;
-    public static event Action<PlayerRef, bool> OnPlayerTurnChanged;
-    public static event Action<bool> OnGameActiveChanged;
-    public static event Action OnRoundComplete;
-    public static event Action OnGameComplete;
-    
-    // Events for player state management
-    public static event Action<PlayerRef, PlayerState> OnPlayerStateAdded;
-    public static event Action<PlayerRef, PlayerState> OnPlayerStateRemoved;
+    // --- Events ---
+    // Network-synced state changes often trigger local events for UI/Logic
+    public static event Action<int> OnRoundChanged;              // Fired when CurrentRound changes
+    public static event Action<bool> OnDraftPhaseChanged;        // Fired when DraftPhaseActive changes
+    public static event Action<bool> OnGameActiveChanged;        // Fired when GameActive changes
+    public static event Action OnAllFightsCompleteForRound; // Fired when all players complete their fight
+    public static event Action OnGameComplete;              // Fired when a player wins the game
+    public static event Action<PlayerRef, PlayerState> OnPlayerStateAdded;    // Fired when a PlayerState registers
+    public static event Action<PlayerRef, PlayerState> OnPlayerStateRemoved;  // Fired when a PlayerState unregisters
+    public static event Action<PlayerRef, bool> OnPlayerFightCompletionUpdated; // Fired LOCALLY when a player's completion status is updated
 
-    // Player references
+    // --- Player References ---
     private Dictionary<PlayerRef, PlayerState> _playerStates = new Dictionary<PlayerRef, PlayerState>();
-    private List<PlayerRef> _allPlayers = new List<PlayerRef>();
+    private List<PlayerRef> _allPlayers = new List<PlayerRef>(); // Keeps track of active player refs
 
-    // Card collections
+    // Card collections (for draft phase - currently unused placeholder)
     private List<CardData> _draftPool = new List<CardData>();
-    
+
     // Flag to track spawned status
     private bool _isSpawned = false;
 
-    // Called when the component is first initialized
+    // Initialization
     private void Awake()
     {
-        // Don't set the instance in Awake - wait until we're spawned
-        // This prevents non-networked instances from becoming the singleton
-        if (GameManager.Instance != null)
-            GameManager.Instance.LogManager.LogMessage("GameState Awake called");
+        // Instance will be set in Spawned
+        GameManager.Instance?.LogManager?.LogMessage("GameState Awake called");
     }
 
-    // Override the Spawned method which is called when the object is spawned on the network
     public override void Spawned()
     {
         base.Spawned();
-        
-        // Only register this as the Instance when it's properly spawned on the network
         _instance = this;
         _isSpawned = true;
-        
-        if (GameManager.Instance != null)
-            GameManager.Instance.LogManager.LogMessage("GameState spawned and singleton set");
-        
+
+        GameManager.Instance?.LogManager?.LogMessage("GameState spawned and singleton set");
+
         if (HasStateAuthority)
         {
-            // Initialize game defaults
+            // Initialize game defaults only on State Authority
             CurrentRound = 1;
-            RoundsToWin = 3;
+            RoundsToWin = 3; // Example value
             GameActive = false;
             DraftPhaseActive = false;
-            RoundComplete = false;
-            
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage("GameState initialized with default values");
+            _playerFightCompletion.Clear(); // Clear dictionary on spawn
+            GameManager.Instance?.LogManager?.LogMessage("GameState (Authority) initialized default network properties.");
         }
+        // All clients need to potentially react to network changes, so event subscriptions happen regardless of authority
     }
+
+    // --- Player Registration ---
 
     public void RegisterPlayer(PlayerRef player, PlayerState state)
     {
         if (!_playerStates.ContainsKey(player))
         {
             _playerStates.Add(player, state);
-            
-            if (_isSpawned && HasStateAuthority && !_allPlayers.Contains(player))
+            GameManager.Instance?.LogManager?.LogMessage($"Player {player} registered PlayerState {state.Id}.");
+
+            // Only State Authority manages the list of active players and completion status
+            if (HasStateAuthority)
             {
-                _allPlayers.Add(player);
-                
-                // Initialize turn state for this player - start with player's turn
-                _isPlayerTurn[player] = true;
-                _isMonsterTurn[player] = false;
-                
-                // Initialize turn count to 1
-                _playerTurnCount[player] = 1;
-                
-                // Initialize round completion tracking
-                _hasCompletedRound[player] = false;
-                
-                // Notify the player that their turn has started
-                RPC_NotifyPlayerTurnState(player, true);
+                 if (!_allPlayers.Contains(player))
+                 {
+                     _allPlayers.Add(player);
+                      // Initialize fight completion tracking for this new player
+                     _playerFightCompletion[player] = false;
+                     // Notify all clients about the new player's fight status via RPC
+                     RPC_UpdatePlayerFightCompletion(player, false);
+                      GameManager.Instance?.LogManager?.LogMessage($"Authority added Player {player} to active list and set fight complete=false.");
+                 }
             }
-            
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage($"Player {player} registered with GameState");
-            
-            // Notify listeners that a player state was added
-            OnPlayerStateAdded?.Invoke(player, state);
+            OnPlayerStateAdded?.Invoke(player, state); // Notify local listeners
+        }
+         else
+        {
+             // GameManager.Instance?.LogManager?.LogMessage($"Player {player} attempted to register PlayerState {state.Id}, but was already registered.");
         }
     }
-    
-    // Method to handle player removal more explicitly
+
     public void UnregisterPlayer(PlayerRef player)
     {
         if (_playerStates.TryGetValue(player, out PlayerState state))
         {
-            // Notify listeners before removing
-            OnPlayerStateRemoved?.Invoke(player, state);
-            
-            // Remove from collections
+            OnPlayerStateRemoved?.Invoke(player, state); // Notify local listeners first
             _playerStates.Remove(player);
-            _allPlayers.Remove(player);
-            _isPlayerTurn.Remove(player);
-            _isMonsterTurn.Remove(player);
-            _playerTurnCount.Remove(player);
-            _hasCompletedRound.Remove(player);
-            
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage($"Player {player} unregistered from GameState");
+            GameManager.Instance?.LogManager?.LogMessage($"Player {player} unregistered PlayerState {state?.Id}.");
+
+            // State Authority removes from tracking lists
+            if (HasStateAuthority)
+            {
+                _allPlayers.Remove(player);
+                if (_playerFightCompletion.Remove(player))
+                {
+                     GameManager.Instance?.LogManager?.LogMessage($"Authority removed Player {player} from active list and completion tracking.");
+                }
+                 // Optional: Could send an RPC to explicitly tell clients to remove the player's UI if needed
+            }
         }
     }
+
+    // --- Game Flow ---
 
     public void StartGame()
     {
-        if (_isSpawned && HasStateAuthority)
+        if (!HasStateAuthority) return; // Only authority can start the game
+        if (!_isSpawned || GameActive) return; // Don't start if not spawned or already active
+
+        GameActive = true;
+        CurrentRound = 1;
+        DraftPhaseActive = false; // Ensure draft phase is off
+
+        // Reset fight completion tracker for all currently registered players
+        // Create a copy of keys to avoid modification during iteration issues
+        List<PlayerRef> playersToReset = new List<PlayerRef>(_playerFightCompletion.Keys);
+        foreach (var player in playersToReset)
         {
-            GameActive = true;
-            CurrentRound = 1;
-            _playersCompletedThisRound = 0;
-            
-            // Reset the round completion tracker
-            foreach (var player in _allPlayers)
+            _playerFightCompletion[player] = false;
+            // Notify clients of the reset status
+            RPC_UpdatePlayerFightCompletion(player, false);
+        }
+
+        GameManager.Instance?.LogManager?.LogMessage("Authority: Game starting! Fight completion reset for all players.");
+        OnGameActiveChanged?.Invoke(true); // Trigger local event (authority only initially)
+
+        // Assign matchups and trigger initial draws after a short delay
+        StartCoroutine(DelayedMatchupAssignmentAndDraw());
+    }
+
+    private IEnumerator DelayedMatchupAssignmentAndDraw()
+    {
+        yield return new WaitForSeconds(1.0f); // Allow time for players to potentially register
+
+        if (!GameActive) yield break; // Check if game was stopped during delay
+
+        GameManager.Instance?.LogManager?.LogMessage($"Authority: Assigning matchups for {_allPlayers.Count} players.");
+        AssignMonsterMatchups(); // Assign initial monster matchups
+
+        // Trigger local card draw for all players
+        foreach (var player in _allPlayers)
+        {
+            RPC_TriggerLocalDraw(player);
+        }
+        GameManager.Instance?.LogManager?.LogMessage($"Authority: Triggered initial local draw for all players.");
+    }
+
+    // RPC to tell a specific client to perform a local card draw at game start
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_TriggerLocalDraw(PlayerRef playerRef, RpcInfo info = default)
+    {
+        // Check if this RPC is targeted at the local player machine
+        if (Runner != null && playerRef == Runner.LocalPlayer)
+        {
+            PlayerState localPlayerState = GetLocalPlayerState();
+            if (localPlayerState != null)
             {
-                _hasCompletedRound[player] = false;
-                _playerTurnCount[player] = 1;
+                // GameManager.Instance?.LogManager?.LogMessage($"RPC_TriggerLocalDraw received for local player {playerRef}. Telling PlayerState to draw.");
+                localPlayerState.DrawInitialHandLocally(); // Call the local draw method
             }
-            
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage("Game starting on network!");
-            
-            // Use coroutine with delay to ensure all players are properly initialized
-            StartCoroutine(DelayedMatchupAssignment());
+             else { /* Log warning if needed */ }
         }
     }
 
-    // New coroutine to delay matchup assignment
-    private IEnumerator DelayedMatchupAssignment()
+    // RPC to tell a specific client to draw for a new round
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_TriggerLocalNewRoundDraw(PlayerRef playerRef, RpcInfo info = default)
     {
-        // Wait for player states to stabilize
-        yield return new WaitForSeconds(1.0f);
-        
-        // Log player count
-        GameManager.Instance.LogManager.LogMessage($"Players registered with GameState: {_playerStates.Count}");
-        foreach (var entry in _playerStates)
+        if (Runner != null && playerRef == Runner.LocalPlayer)
         {
-            GameManager.Instance.LogManager.LogMessage($"  - Player {entry.Key}: {entry.Value.PlayerName}");
-        }
-        
-        // Assign initial monster matchups
-        AssignMonsterMatchups();
-        
-        // Use RPC to ensure all players draw cards
-        RPC_DrawInitialCardsForAllPlayers();
-        
-        // Start every player's turn (no need for turns in sequence)
-        if (HasStateAuthority)
-        {
-            foreach (var player in _allPlayers)
+            PlayerState localPlayerState = GetLocalPlayerState();
+            if (localPlayerState != null)
             {
-                // Set this player's turn to active
-                _isPlayerTurn[player] = true;
-                _isMonsterTurn[player] = false;
-                
-                // Notify the player that it's their turn
-                RPC_NotifyPlayerTurnState(player, true);
+                // GameManager.Instance?.LogManager?.LogMessage($"RPC_TriggerLocalNewRoundDraw received for local player {playerRef}. Telling PlayerState to draw new hand.");
+                localPlayerState.DrawNewHandLocally(); // Call the local new hand draw method
+            }
+             else { /* Log warning if needed */ }
+        }
+    }
+
+    // --- Fight Completion Handling ---
+
+    // RPC Called by a client's PlayerState (via InputAuthority) when they finish their fight locally
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    public void RPC_NotifyFightComplete(PlayerRef player, RpcInfo info = default)
+    {
+        if (!HasStateAuthority) return;
+
+        if (_playerFightCompletion.ContainsKey(player))
+        {
+            if (!_playerFightCompletion[player]) // Only process if not already complete
+            {
+                GameManager.Instance?.LogManager?.LogMessage($"Authority: Fight completion received from player {player}.");
+                _playerFightCompletion[player] = true;
+
+                // Notify all clients about this player's completion
+                RPC_UpdatePlayerFightCompletion(player, true);
+
+                // Check if all players have now completed their fights
+                CheckAllFightsComplete();
+            }
+             //else { GameManager.Instance?.LogManager?.LogMessage($"Authority: Fight completion received from player {player}, but they were already marked complete."); }
+        }
+        // else { GameManager.Instance?.LogManager?.LogMessage($"Warning: Authority: Fight completion received from unknown or unregistered player {player}."); }
+    }
+
+    // RPC Called by State Authority to update the fight completion status on all clients
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_UpdatePlayerFightCompletion(PlayerRef player, bool isComplete, RpcInfo info = default)
+    {
+         // Update local dictionary on all clients
+        _playerFightCompletion[player] = isComplete;
+        OnPlayerFightCompletionUpdated?.Invoke(player, isComplete); // Notify local listeners (e.g., UI)
+        // GameManager.Instance?.LogManager?.LogMessage($"Client: Fight completion status updated for player {player} to {isComplete}.");
+    }
+
+    // Checks if all active players have completed their fights for the current round
+    private void CheckAllFightsComplete()
+    {
+        if (!HasStateAuthority || !GameActive) return; // Only authority checks during active game
+
+        int completedCount = 0;
+        int requiredCount = _allPlayers.Count; // Number of players expected to complete
+
+        if (requiredCount == 0) return; // No players, nothing to check
+
+        foreach (var player in _allPlayers)
+        {
+            if (_playerFightCompletion.TryGetValue(player, out bool isComplete) && isComplete)
+            {
+                completedCount++;
             }
         }
-        
-        // Notify about game active state change
-        OnGameActiveChanged?.Invoke(true);
-    }
-    
-    // New RPC method to handle turn end requests from any client
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    public void RPC_RequestEndTurn(PlayerRef player)
-    {
-        // Only process if we have state authority
-        if (!HasStateAuthority)
+
+        // GameManager.Instance?.LogManager?.LogMessage($"Authority: Checking fight completion: {completedCount}/{requiredCount} players complete.");
+
+        if (completedCount >= requiredCount)
         {
-            GameManager.Instance.LogManager.LogError($"RPC_RequestEndTurn received but this client doesn't have state authority!");
-            return;
-        }
-        
-        GameManager.Instance.LogManager.LogMessage($"Processing turn end request for player {player}");
-        
-        // If it's currently the player's turn, switch to monster's turn
-        if (_isPlayerTurn.ContainsKey(player) && _isPlayerTurn[player])
-        {
-            // Change to monster's turn
-            _isPlayerTurn[player] = false;
-            _isMonsterTurn[player] = true;
-            
-            // Notify all clients about the turn change
-            RPC_NotifyPlayerTurnState(player, false);
-            
-            // Simulate monster's turn after a short delay
-            StartCoroutine(SimulateMonsterTurn(player));
-            
-            GameManager.Instance.LogManager.LogMessage($"Player {player}'s turn ended, monster's turn started");
-        }
-        else
-        {
-            GameManager.Instance.LogManager.LogError($"Cannot end turn for player {player}: not currently in player turn state");
+            GameManager.Instance?.LogManager?.LogMessage("Authority: All players have completed their fights for this round.");
+            RPC_TriggerAllFightsCompleteForRound(); // Notify clients
+
+            // Check if game should end based on score
+            CheckGameEnd();
+            if (!GameActive) return; // Stop if game ended
+
+            // Start draft phase (or next round if draft is skipped)
+            StartDraftPhase();
         }
     }
-    
-    // Notify player about their turn state
+
+     // RPC to notify clients that all fights for the round are complete
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_NotifyPlayerTurnState(PlayerRef player, bool isPlayerTurn)
+    private void RPC_TriggerAllFightsCompleteForRound(RpcInfo info = default)
     {
-        // Update local dictionaries
-        _isPlayerTurn[player] = isPlayerTurn;
-        _isMonsterTurn[player] = !isPlayerTurn;
-        
-        // Notify UI through event
-        OnPlayerTurnChanged?.Invoke(player, isPlayerTurn);
-        
-        GameManager.Instance.LogManager.LogMessage($"Turn changed for player {player}: {(isPlayerTurn ? "Player's Turn" : "Monster's Turn")}");
+        OnAllFightsCompleteForRound?.Invoke(); // Trigger local event
+        // GameManager.Instance?.LogManager?.LogMessage($"Client: RPC_TriggerAllFightsCompleteForRound received.");
     }
-    
-    // RPC: Ensure all players draw cards
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_DrawInitialCardsForAllPlayers()
-    {
-        if (GameManager.Instance != null)
-            GameManager.Instance.LogManager.LogMessage("Drawing initial cards for all players");
-        
-        // First try the normal draw method for authority players
-        foreach (var playerEntry in _playerStates)
-        {
-            playerEntry.Value.DrawInitialHand();
-        }
-        
-        // Use this delayed call to ensure cards are drawn even for non-authority players
-        StartCoroutine(DelayedForceCardDraw());
-    }
-    
-    // Delayed force card draw to ensure all players get cards
-    private IEnumerator DelayedForceCardDraw()
-    {
-        // Wait a short time to allow normal draws to complete
-        yield return new WaitForSeconds(0.2f);
-        
-        // Force draw for all players to ensure everyone has cards
-        foreach (var playerEntry in _playerStates)
-        {
-            // Call the force draw method that bypasses authority check
-            playerEntry.Value.ForceDrawInitialHand();
-        }
-        
-        if (GameManager.Instance != null)
-            GameManager.Instance.LogManager.LogMessage("Forced initial card draw for all players");
-    }
+
+
+    // --- Matchmaking & Round Progression ---
 
     private void AssignMonsterMatchups()
     {
+        if (!HasStateAuthority) return;
+
         if (_playerStates.Count < 2)
         {
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage("Not enough players to assign matchups, adding AI opponent");
-            
-            // For single-player testing, create an AI opponent
-            if (_playerStates.Count == 1 && HasStateAuthority)
+            GameManager.Instance?.LogManager?.LogMessage("Authority: Not enough players for standard matchups.");
+            if (_playerStates.Count == 1)
             {
-                // Just match the player against their own monster for now
-                // In the future, you could create an AI player
                 PlayerRef playerRef = _allPlayers[0];
-                RPC_SetMonsterMatchup(playerRef, playerRef);
-                GameManager.Instance.LogManager.LogMessage($"Single player mode: Player {playerRef} vs own monster");
-                return;
+                RPC_SetMonsterMatchup(playerRef, playerRef); // Player fights their own monster
+                GameManager.Instance?.LogManager?.LogMessage($"Authority: Single player mode: Player {playerRef} vs own monster");
             }
+            return;
         }
 
-        // Create a list of all players
-        List<PlayerRef> players = new List<PlayerRef>(_playerStates.Keys);
-        
-        // Shuffle the players to create random matchups
+        List<PlayerRef> players = new List<PlayerRef>(_allPlayers); // Use the tracked list
         ShuffleList(players);
-        
         for (int i = 0; i < players.Count; i++)
         {
-            // Each player fights the next player's monster (circular)
-            PlayerRef opponent = players[(i + 1) % players.Count];
-            
-            // Use RPCs to inform clients of their matchups
+            PlayerRef opponent = players[(i + 1) % players.Count]; // Circular assignment
             RPC_SetMonsterMatchup(players[i], opponent);
-            
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage($"Matchup: Player {players[i]} vs Monster from {opponent}");
+            // GameManager.Instance?.LogManager?.LogMessage($"Authority: Matchup: Player {players[i]} vs Monster from {opponent}");
         }
     }
 
+    // RPC to tell clients who their opponent is for the round
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_SetMonsterMatchup(PlayerRef player, PlayerRef monsterOwner)
+    private void RPC_SetMonsterMatchup(PlayerRef player, PlayerRef monsterOwner, RpcInfo info = default)
     {
-        if (_playerStates.TryGetValue(player, out PlayerState playerState) && 
+        if (_playerStates.TryGetValue(player, out PlayerState playerState) &&
             _playerStates.TryGetValue(monsterOwner, out PlayerState monsterState))
         {
-            // Set the opponent monster reference using the PlayerState reference
-            playerState.SetOpponentMonster(monsterOwner, monsterState);
-            
-            GameManager.Instance.LogManager.LogMessage($"Set monster matchup for player {player}");
+            playerState.SetOpponentMonsterLocally(monsterOwner, monsterState); // Use local method on PlayerState
+            // GameManager.Instance?.LogManager?.LogMessage($"Client: Set monster matchup locally for player {player} (Opponent: {monsterOwner})");
         }
-        else
-        {
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage($"Could not find player states for matchup between {player} and {monsterOwner}");
-        }
+        // else { GameManager.Instance?.LogManager?.LogMessage($"Client: Could not find player states for matchup RPC between {player} and {monsterOwner}"); }
     }
 
-    // FIXED: NextTurn now handles drawing properly regardless of player state authority
-    // FIXED: Properly isolate player turn changes
-// FIXED: Properly isolate player turn changes
-public bool NextTurn(PlayerRef player)
-{
-    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
-    
-    if (!_isSpawned || !HasStateAuthority || !GameActive)
-    {
-        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - NextTurn precondition failed: Spawned={_isSpawned}, Authority={HasStateAuthority}, GameActive={GameActive}");
-        return false;
-    }
-    
-    // Check that we're only processing turn change for a known player
-    if (!_playerStates.ContainsKey(player))
-    {
-        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - NextTurn called for unknown player: {player}");
-        return false;
-    }
-    
-    // If it's currently the player's turn, switch to monster's turn
-    if (_isPlayerTurn.ContainsKey(player) && _isPlayerTurn[player])
-    {
-        // Change to monster's turn FOR THIS PLAYER ONLY
-        _isPlayerTurn[player] = false;
-        _isMonsterTurn[player] = true;
-        
-        // Notify THIS PLAYER it's now the monster's turn
-        RPC_NotifyPlayerTurnState(player, false);
-        
-        // Simulate monster's turn after a short delay FOR THIS PLAYER ONLY
-        StartCoroutine(SimulateMonsterTurn(player));
-        
-        GameManager.Instance.LogManager.LogMessage($"[{debugId}] Player {player}'s turn ended, monster's turn started");
-        return true;
-    }
-    // If it's the monster's turn ending - should be handled by SimulateMonsterTurn
-    else
-    {
-        GameManager.Instance.LogManager.LogError($"[{debugId}] NextTurn called during monster's turn - unexpected flow, use SimulateMonsterTurn instead");
-        return false;
-    }
-}
 
-    
-    // FIXED: Improved RPC to force drawing cards with better logging
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-private void RPC_ForceDrawNewHandForPlayer(PlayerRef playerRef)
-{
-    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
-    GameManager.Instance.LogManager.LogMessage($"[{debugId}] RPC_ForceDrawNewHandForPlayer received for player {playerRef}");
-    
-    bool playerFound = false;
-    
-    // Try to find player in _playerStates dictionary
-    if (_playerStates.TryGetValue(playerRef, out PlayerState playerState))
+    private void StartDraftPhase()
     {
-        playerFound = true;
-        string playerName = playerState.PlayerName.ToString();
-        GameManager.Instance.LogManager.LogMessage($"[{debugId}] FOUND PLAYER - Drawing new hand for {playerName} (Player {playerRef})");
-        
-        // Bypass authority checks directly with specialized method
-        playerState.ForceDrawNewHandDirectly();
-    }
-    
-    // If not found through dictionary, try searching all player states
-    if (!playerFound)
-    {
-        GameManager.Instance.LogManager.LogError($"[{debugId}] PLAYER NOT FOUND - Could not find PlayerState for Player {playerRef} in dictionary!");
-        
-        // Try to find the player another way - search all PlayerState objects
-        PlayerState[] allPlayerStates = UnityEngine.Object.FindObjectsByType<PlayerState>(FindObjectsSortMode.None);
-        foreach (PlayerState ps in allPlayerStates)
-        {
-            if (ps.Object.InputAuthority == playerRef)
-            {
-                string playerName = ps.PlayerName.ToString();
-                GameManager.Instance.LogManager.LogMessage($"[{debugId}] FOUND THROUGH SEARCH - Found {playerName} through object search");
-                ps.ForceDrawNewHandDirectly();
-                playerFound = true;
-                break;
-            }
-        }
-    }
-    
-    if (!playerFound)
-    {
-        GameManager.Instance.LogManager.LogError($"[{debugId}] CRITICAL ERROR - Could not find PlayerState for {playerRef} by any method!");
-    }
-}
-    
-    // Check if the player completed a round - you can define this based on turn count
-    private void CheckPlayerRoundComplete(PlayerRef player)
-    {
-        // For demonstration, let's say a "round" for a player is 3 turns
-        // This would be adjusted based on your game design
-        if (_playerTurnCount.TryGetValue(player, out int turnCount) && turnCount % 3 == 0)
-        {
-            // Player completed a round
-            GameManager.Instance.LogManager.LogMessage($"Player {player} completed a round!");
-            _hasCompletedRound[player] = true;
-            
-            // Check if all players have completed this round
-            CheckAllPlayersRoundComplete();
-        }
-    }
-    
-    // Check if all players have completed their rounds
-    private void CheckAllPlayersRoundComplete()
-    {
-        if (!HasStateAuthority)
-            return;
-            
-        // Count players who have completed their rounds
-        int completedCount = 0;
-        foreach (var entry in _hasCompletedRound)
-        {
-            if (entry.Value)
-                completedCount++;
-        }
-        
-        _playersCompletedThisRound = completedCount;
-        
-        // If all players have completed a round, advance the global round
-        if (_playersCompletedThisRound >= _allPlayers.Count)
-        {
-            // All players have finished their rounds
-            RoundComplete = true;
-            RPC_TriggerRoundComplete();
-            
-            // Check if game should end
-            CheckGameEnd();
-            
-            if (!GameActive)
-            {
-                return;
-            }
-            
-            // Start draft phase - this is a global state
-            DraftPhaseActive = true;
-            OnDraftPhaseChanged?.Invoke(true);
-            GenerateDraftOptions();
-            
-            // Reset counters for next round
-            _playersCompletedThisRound = 0;
-            foreach (var player in _allPlayers)
-            {
-                _hasCompletedRound[player] = false;
-            }
-        }
-    }
-    
-    // FIXED: Improved monster turn simulation with explicit logging
-    // FIXED: Improved monster turn simulation with proper player isolation
-private IEnumerator SimulateMonsterTurn(PlayerRef player)
-{
-    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
-    GameManager.Instance.LogManager.LogMessage($"[{debugId}] START - Monster turn simulation for player {player}");
-    
-    // Wait a short time to simulate monster thinking
-    yield return new WaitForSeconds(1.0f);
-    
-    // For now, just immediately end the monster's turn
-    // In the future, implement monster AI actions here
-    GameManager.Instance.LogManager.LogMessage($"[{debugId}] COMPLETE - Monster turn simulation for player {player}");
-    
-    // CRITICAL FIX: Only send turn end for the specific player whose monster just acted
-    if (HasStateAuthority)
-    {
-        // Directly manage just this player's turn
-        if (_isMonsterTurn.ContainsKey(player) && _isMonsterTurn[player])
-        {
-            // Increment player's turn count
-            if (_playerTurnCount.ContainsKey(player))
-            {
-                _playerTurnCount[player]++;
-                GameManager.Instance.LogManager.LogMessage($"[{debugId}] TURN INCREMENT - Player {player} starting turn #{_playerTurnCount[player]}");
-            }
-            
-            // Set back to player's turn for THIS PLAYER ONLY
-            _isPlayerTurn[player] = true;
-            _isMonsterTurn[player] = false;
-            
-            // Refresh THIS player's resources for their next turn
-            if (_playerStates.TryGetValue(player, out PlayerState playerState))
-            {
-                if (playerState.HasStateAuthority)
-                {
-                    // Reset energy to max
-                    playerState.ModifyEnergy(playerState.MaxEnergy - playerState.Energy);
-                    
-                    // CRITICAL FIX: Draw cards specifically for this player BEFORE changing turn state
-                    // This ensures cards are drawn before player gets control
-                    GameManager.Instance.LogManager.LogMessage($"[{debugId}] DRAW CARDS - Explicitly drawing cards for player {player}");
-                    RPC_ForceDrawNewHandForPlayer(player);
-                    
-                    // Give the card drawing RPC time to propagate before notifying about turn change
-                    yield return new WaitForSeconds(0.2f);
-                }
-            }
-            
-            // Notify THIS player it's their turn again AFTER cards have been drawn
-            RPC_NotifyPlayerTurnState(player, true);
-            
-            GameManager.Instance.LogManager.LogMessage($"[{debugId}] TURN CHANGE - Monster's turn for player {player} ended, player's turn started");
-            
-            // Check if this completed a round for this player
-            CheckPlayerRoundComplete(player);
-        }
-        else
-        {
-            GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - Cannot end monster turn for player {player}: not in monster turn state");
-        }
-    }
-    else
-    {
-        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - Cannot end monster turn: no state authority");
-    }
-}
+        if (!HasStateAuthority || !GameActive) return;
 
-// NEW: Draw cards for a specific player only - prevents drawing for all players
-[Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-private void RPC_DrawNewHandForSpecificPlayer(PlayerRef playerRef)
-{
-    // Only process the card draw for the specified player
-    if (_playerStates.TryGetValue(playerRef, out PlayerState playerState))
-    {
-        GameManager.Instance.LogManager.LogMessage($"RPC_DrawNewHandForSpecificPlayer: Drawing new hand ONLY for {playerState.PlayerName} (Player {playerRef})");
-        
-        // Call forced draw on this specific player only
-        playerState.ForceDrawNewHandDirectly();
-    }
-    else
-    {
-        GameManager.Instance.LogManager.LogError($"RPC_DrawNewHandForSpecificPlayer: Could not find PlayerState for {playerRef}");
-    }
-}
+        DraftPhaseActive = true;
+        RPC_DraftPhaseChanged(true); // Notify clients
+        GameManager.Instance?.LogManager?.LogMessage("Authority: Starting Draft Phase.");
 
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_TriggerRoundComplete()
-    {
-        OnRoundComplete?.Invoke();
+        // --- Draft Logic Placeholder ---
+        // GenerateDraftOptions();
+        // HandleDraftSelections(); // This would likely involve more RPCs
+        // --- End Placeholder ---
+
+        // For now, skip draft and immediately end it to start the next round
+        StartCoroutine(SimulateDraftPhase()); // Simulate a delay for draft
     }
 
-    private void CheckGameEnd()
+    private IEnumerator SimulateDraftPhase()
     {
-        foreach (var playerEntry in _playerStates)
-        {
-            if (playerEntry.Value.GetScore() >= RoundsToWin)
-            {
-                // Game over, this player won
-                RPC_TriggerGameComplete(playerEntry.Key);
-                GameActive = false;
-                OnGameActiveChanged?.Invoke(false);
-                break;
-            }
-        }
+         yield return new WaitForSeconds(2.0f); // Placeholder delay for draft
+         EndDraftPhase();
     }
 
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_TriggerGameComplete(PlayerRef winner)
-    {
-        OnGameComplete?.Invoke();
-        if (GameManager.Instance != null)
-            GameManager.Instance.LogManager.LogMessage($"Game complete! Player {winner} is the winner!");
-    }
 
-    private void GenerateDraftOptions()
+    private void EndDraftPhase()
     {
-        // Generate draft options will be implemented later
-        // For now it's just a placeholder
-        
-        // After draft phase completes:
-        // DraftPhaseActive = false;
-        // StartNextRound();
-        
-        // For now, just start next round immediately
+        if (!HasStateAuthority || !GameActive) return;
+
+        DraftPhaseActive = false;
+        RPC_DraftPhaseChanged(false); // Notify clients
+        GameManager.Instance?.LogManager?.LogMessage("Authority: Ending Draft Phase.");
+
+        // Start the next round
         StartNextRound();
     }
 
-    // StartNextRound advances the global round counter
-    // StartNextRound advances the global round counter
-private void StartNextRound()
-{
-    if (_isSpawned && HasStateAuthority)
+    // RPC to notify clients about draft phase state changes
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_DraftPhaseChanged(bool isActive, RpcInfo info = default)
     {
+        OnDraftPhaseChanged?.Invoke(isActive);
+        // GameManager.Instance?.LogManager?.LogMessage($"Client: RPC_DraftPhaseChanged received: {isActive}");
+    }
+
+
+    private void StartNextRound()
+    {
+        if (!HasStateAuthority || !GameActive) return;
+
         CurrentRound++;
-        RoundComplete = false;
-        
-        // Notify clients
-        RPC_RoundChanged(CurrentRound);
-        
-        // Reset player state for new round
-        foreach (var playerEntry in _playerStates)
+        RPC_RoundChanged(CurrentRound); // Notify clients of the new round number
+
+        // Reset player states and fight completion for the new round
+        // Create a copy of keys to avoid modification during iteration issues
+        List<PlayerRef> playersToPrepare = new List<PlayerRef>(_playerFightCompletion.Keys);
+        foreach (var playerRef in playersToPrepare)
         {
-            // Reset monster health etc.
-            playerEntry.Value.PrepareForNewRound();
-            
-            // Reset round completion tracking
-            if (_hasCompletedRound.ContainsKey(playerEntry.Key))
-            {
-                _hasCompletedRound[playerEntry.Key] = false;
-            }
+            // Tell the authoritative PlayerState to prepare for the new round via RPC
+             if(_playerStates.TryGetValue(playerRef, out PlayerState playerState))
+             {
+                 playerState.RPC_PrepareForNewRound();
+             }
+
+            // Reset fight completion status locally on the server
+            _playerFightCompletion[playerRef] = false;
+            // Notify all clients of the reset status
+            RPC_UpdatePlayerFightCompletion(playerRef, false);
         }
-        
+
         // Assign new monster matchups
         AssignMonsterMatchups();
-        
-        // CRITICAL FIX: Draw cards for each player INDIVIDUALLY to prevent cross-talk
-        // This ensures players get their initial hands without affecting each other
+
+        // Trigger local card draw for all players for the new round
         foreach (var player in _allPlayers)
         {
-            // Set each player to player turn
-            _isPlayerTurn[player] = true;
-            _isMonsterTurn[player] = false;
-            
-            // Draw cards for THIS PLAYER ONLY using new specific method
-            RPC_DrawNewHandForSpecificPlayer(player);
-            
-            // Notify the player about their turn state
-            RPC_NotifyPlayerTurnState(player, true);
-            
-            // Add small delay between player setups to avoid network contention
-            StartCoroutine(DelayBetweenPlayerSetups());
+            RPC_TriggerLocalNewRoundDraw(player);
         }
-        
-        GameManager.Instance.LogManager.LogMessage("All players initialized for new round with individual turns and card draws");
+
+        GameManager.Instance?.LogManager?.LogMessage($"Authority: Starting Round {CurrentRound}. Matchups assigned, players reset, draw triggered.");
     }
-}
 
-// Helper coroutine to add slight delay between player turn setups
-private IEnumerator DelayBetweenPlayerSetups()
-{
-    yield return new WaitForSeconds(0.1f);
-}
-
+    // RPC to update round number on clients
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_RoundChanged(int round)
+    private void RPC_RoundChanged(int round, RpcInfo info = default)
     {
         OnRoundChanged?.Invoke(round);
+        // GameManager.Instance?.LogManager?.LogMessage($"Client: RPC_RoundChanged received: Round {round}");
     }
+
+    // --- Game End Condition ---
+
+    private void CheckGameEnd()
+    {
+        if (!HasStateAuthority || !GameActive) return;
+
+        foreach (var playerEntry in _playerStates)
+        {
+            // Use GetScore() which accesses the networked property
+            if (playerEntry.Value.GetScore() >= RoundsToWin)
+            {
+                GameManager.Instance?.LogManager?.LogMessage($"Authority: Player {playerEntry.Key} reached score limit ({RoundsToWin})!");
+                RPC_TriggerGameComplete(playerEntry.Key); // Notify all clients of winner
+                GameActive = false; // Stop the game on authority
+                OnGameActiveChanged?.Invoke(false); // Trigger local event
+                return; // Exit once a winner is found
+            }
+        }
+    }
+
+    // RPC to notify all clients that the game is over and who won
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_TriggerGameComplete(PlayerRef winner, RpcInfo info = default)
+    {
+        OnGameComplete?.Invoke(); // Trigger local game complete event
+        // GameManager.Instance?.LogManager?.LogMessage($"Client: RPC_TriggerGameComplete received! Winner: Player {winner}");
+        // UI can react to OnGameComplete event
+    }
+
+
+    // --- Utility & Accessors ---
 
     private static void ShuffleList<T>(List<T> list)
     {
         int n = list.Count;
+        System.Random rng = new System.Random(); // Consider seeding if needed
         while (n > 1)
         {
             n--;
-            int k = UnityEngine.Random.Range(0, n + 1);
-            T value = list[k];
-            list[k] = list[n];
-            list[n] = value;
+            int k = rng.Next(n + 1);
+            (list[k], list[n]) = (list[n], list[k]); // Swap using tuple deconstruction
         }
     }
 
@@ -710,7 +470,7 @@ private IEnumerator DelayBetweenPlayerSetups()
 
     public Dictionary<PlayerRef, PlayerState> GetAllPlayerStates()
     {
-        return new Dictionary<PlayerRef, PlayerState>(_playerStates);
+        return new Dictionary<PlayerRef, PlayerState>(_playerStates); // Return a copy
     }
 
     public PlayerRef GetLocalPlayerRef()
@@ -719,89 +479,38 @@ private IEnumerator DelayBetweenPlayerSetups()
         return networkRunner?.LocalPlayer ?? default;
     }
 
-    // Helper method to get a PlayerState by PlayerRef
     public PlayerState GetPlayerState(PlayerRef playerRef)
     {
-        if (_playerStates.TryGetValue(playerRef, out PlayerState state))
-        {
-            return state;
-        }
-        return null;
+        _playerStates.TryGetValue(playerRef, out PlayerState state);
+        return state;
     }
 
-    // Check if it's the local player's turn based on player-specific turn state
-    public bool IsLocalPlayerTurn()
+    // Method to check fight completion status LOCALLY for a specific player
+    public bool IsPlayerFightComplete(PlayerRef playerRef)
     {
-        if (!_isSpawned) return false;
-        
-        var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
-        if (networkRunner == null) return false;
-        
-        PlayerRef localPlayer = networkRunner.LocalPlayer;
-        
-        // Check if it's this player's turn in our dictionary
-        if (_isPlayerTurn.TryGetValue(localPlayer, out bool isPlayerTurn))
-        {
-            return isPlayerTurn;
-        }
-        
-        // Default to allowing the turn if we're not sure
-        // This helps during initialization and prevents blocks
-        return true;
-    }
-
-    // Get the current turn number for a player
-    public int GetPlayerTurnCount(PlayerRef player)
-    {
-        if (_playerTurnCount.TryGetValue(player, out int turnCount))
-        {
-            return turnCount;
-        }
-        return 1; // Default to 1 if not found
+        // Reads the local dictionary which is kept in sync by RPC_UpdatePlayerFightCompletion
+        return _playerFightCompletion.TryGetValue(playerRef, out bool isComplete) && isComplete;
     }
 
     // Safe accessors for networked properties
-    public int GetCurrentRound()
-    {
-        return _isSpawned ? CurrentRound : 1;
-    }
+    public int GetCurrentRound() => _isSpawned ? CurrentRound : 1;
+    public bool IsDraftPhaseActive() => _isSpawned && DraftPhaseActive;
+    public bool IsGameActive() => _isSpawned && GameActive;
+    public bool IsSpawned() => _isSpawned;
 
-    public bool IsDraftPhaseActive()
-    {
-        return _isSpawned && DraftPhaseActive;
-    }
-
-    public bool IsGameActive()
-    {
-        return _isSpawned && GameActive;
-    }
-
-    // Get turn state for a specific player
-    public bool IsPlayerTurn(PlayerRef player)
-    {
-        if (_isPlayerTurn.TryGetValue(player, out bool isPlayerTurn))
-        {
-            return isPlayerTurn;
-        }
-        return false;
-    }
-
-    public bool IsSpawned()
-    {
-        return _isSpawned;
-    }
 
     public override void Despawned(NetworkRunner runner, bool hasState)
     {
         base.Despawned(runner, hasState);
-        
-        // Only clear the instance if this is the current instance
         if (_instance == this)
         {
             _instance = null;
             _isSpawned = false;
-            if (GameManager.Instance != null)
-                GameManager.Instance.LogManager.LogMessage("GameState instance cleared on despawn");
+            // Cleanup if necessary
+            _playerStates.Clear();
+            _allPlayers.Clear();
+            _playerFightCompletion.Clear();
+            GameManager.Instance?.LogManager?.LogMessage("GameState instance cleared and collections reset on despawn");
         }
     }
 }

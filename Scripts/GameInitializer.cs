@@ -6,256 +6,181 @@ public class GameInitializer : MonoBehaviour
 {
     // Game object references
     private GameObject _gameUIObject;
-    
     // Component references
     private GameUI _gameUI;
-    
-    // Game state
-    private bool _gameInitialized = false;
-    private bool _gameplayStarted = false;
-    private bool _initializationInProgress = false;
+
+    // Game state flags
+    private bool _gameInitialized = false; // Has initialization sequence completed successfully?
+    private bool _gameplayStarted = false; // Has StartGameplay been called successfully?
+    private bool _initializationInProgress = false; // Coroutine running?
+
+    // Initialization retry settings
+    private float _initWaitInterval = 0.5f; // How often to check conditions
+    private float _registrationTimeout = 20.0f; // Max time to wait for GameState/PlayerState
 
     public void InitializeGame()
     {
-        if (_gameInitialized || _initializationInProgress) return;
-        
-        _initializationInProgress = true;
-        GameManager.Instance.LogManager.LogMessage("Initializing game objects and systems...");
-        
-        // Start the initialization process
+        if (_gameInitialized || _initializationInProgress)
+        {
+             GameManager.Instance?.LogManager?.LogMessage($"GameInitializer: InitializeGame called but already initialized ({_gameInitialized}) or in progress ({_initializationInProgress}). Ignoring.");
+             return;
+        }
+
+        GameManager.Instance?.LogManager?.LogMessage("GameInitializer: Starting Initialization Sequence...");
         StartCoroutine(InitializeGameSequence());
     }
 
     private IEnumerator InitializeGameSequence()
     {
-        // Get network runner
-        NetworkRunner runner = GameManager.Instance.NetworkManager.GetRunner();
-        if (runner == null)
-        {
-            GameManager.Instance.LogManager.LogError("NetworkRunner not available!");
-            _initializationInProgress = false;
-            yield break;
-        }
-        
-        // Wait for GameState.Instance to be available
-        float timeoutSeconds = 10.0f;
+        _initializationInProgress = true;
         float startTime = Time.time;
-        
-        while (GameState.Instance == null)
+        string sequenceId = $"InitSeq-{UnityEngine.Random.Range(1000, 9999)}"; // For tracking logs
+
+        GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] Starting...");
+
+        // --- 1. Wait for Network Runner ---
+        NetworkRunner runner = null;
+        while (runner == null)
         {
-            if (Time.time - startTime > timeoutSeconds)
+             if (Time.time - startTime > _registrationTimeout) {
+                 GameManager.Instance?.LogManager?.LogError($"[{sequenceId}] Timed out waiting for NetworkRunner.");
+                 _initializationInProgress = false;
+                 yield break; // Abort
+             }
+             runner = GameManager.Instance?.NetworkManager?.GetRunner();
+            yield return new WaitForSeconds(_initWaitInterval);
+        }
+        GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] NetworkRunner ready.");
+
+
+        // --- 2. Wait for GameState Instance to be Spawned ---
+        while (GameState.Instance == null || !GameState.Instance.IsSpawned())
+        {
+            if (Time.time - startTime > _registrationTimeout)
             {
-                GameManager.Instance.LogManager.LogError("Timed out waiting for GameState.Instance to be available");
+                GameManager.Instance?.LogManager?.LogError($"[{sequenceId}] Timed out waiting for GameState.Instance to be available and spawned.");
                 _initializationInProgress = false;
-                yield break;
+                yield break; // Abort initialization
             }
-            
-            GameManager.Instance.LogManager.LogMessage("Waiting for GameState.Instance to be available...");
-            yield return new WaitForSeconds(0.2f);
+            // GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] Waiting for GameState.Instance to be spawned...");
+            yield return new WaitForSeconds(_initWaitInterval);
         }
-        
-        // Make sure the GameState is spawned on the network
-        timeoutSeconds = 5.0f;
-        startTime = Time.time;
-        
-        while (!GameState.Instance.IsSpawned())
+        GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] GameState.Instance is valid and spawned (ID: {GameState.Instance.Id}).");
+
+
+        // --- 3. Wait for Local PlayerState to be Registered with GameState ---
+        PlayerState localPlayerState = null;
+        while (localPlayerState == null)
         {
-            if (Time.time - startTime > timeoutSeconds)
+            if (Time.time - startTime > _registrationTimeout)
             {
-                GameManager.Instance.LogManager.LogError("GameState.Instance exists but is not spawned properly");
+                 // *** REMOVED Temporary PlayerState Creation Logic ***
+                 // If we time out here, it's a real problem.
+                GameManager.Instance?.LogManager?.LogError($"[{sequenceId}] Timed out waiting for local PlayerState to be registered with GameState.");
                 _initializationInProgress = false;
-                yield break;
+                // TODO: Handle this failure case (e.g., return to lobby, show error message)
+                yield break; // Abort initialization
             }
-            
-            GameManager.Instance.LogManager.LogMessage("Waiting for GameState to be fully spawned...");
-            yield return new WaitForSeconds(0.2f);
-        }
-        
-        // Wait for local player to be registered with GameState
-        timeoutSeconds = 10.0f;
-        startTime = Time.time;
-        
-        while (GameState.Instance.GetLocalPlayerState() == null)
-        {
-            if (Time.time - startTime > timeoutSeconds)
+
+            // Attempt to get the local player state via GameState
+            localPlayerState = GameState.Instance.GetLocalPlayerState();
+
+            if (localPlayerState == null)
             {
-                GameManager.Instance.LogManager.LogMessage("Local player not registered after timeout, creating a temporary player state");
-                
-                // Force player registration by creating a temporary PlayerState
-                yield return StartCoroutine(CreateTemporaryPlayerState(runner));
-                
-                if (GameState.Instance.GetLocalPlayerState() == null)
-                {
-                    GameManager.Instance.LogManager.LogError("Failed to create local player state");
-                    _initializationInProgress = false;
-                    yield break;
-                }
-                break;
+                 // GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] Waiting for local PlayerState registration...");
+                 yield return new WaitForSeconds(_initWaitInterval);
             }
-            
-            GameManager.Instance.LogManager.LogMessage("Waiting for local player state to be registered...");
-            yield return new WaitForSeconds(0.2f);
         }
-        
-        // Once GameState.Instance is available and player state is registered, set flag
+        GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] Local PlayerState found and registered (ID: {localPlayerState.Id}).");
+
+        // --- 4. Initialization Steps Successful - Create UI ---
+         GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] All prerequisites met. Creating Game UI...");
+        CreateGameUI(); // Create UI only AFTER player state is confirmed
+
         _gameInitialized = true;
-        
-        // Create game UI - this is local only
-        CreateGameUI();
-        
         _initializationInProgress = false;
-        GameManager.Instance.LogManager.LogMessage("Game initialized successfully");
-        
-        // Start gameplay immediately once initialization is complete
-        StartGameplay();
+        GameManager.Instance?.LogManager?.LogMessage($"[{sequenceId}] Game initialized successfully. Ready to start gameplay.");
+
+        // --- 5. Automatically Start Gameplay (Optional) ---
+        // Decide if gameplay should start immediately after initialization
+        // This was previously called here, keeping it for now.
+         StartGameplay(); // Proceed to start the actual game logic
     }
 
-    // Helper class to track temporary player states
-    private class TemporaryPlayerStateMarker : MonoBehaviour { }
 
-    private IEnumerator CreateTemporaryPlayerState(NetworkRunner runner)
-    {
-        // Try to create a temporary player state
-        GameObject playerStateObj = new GameObject("TemporaryPlayerState");
-        DontDestroyOnLoad(playerStateObj);
-        
-        // Add network object component
-        NetworkObject networkObject = playerStateObj.AddComponent<NetworkObject>();
-        
-        // Add player state component
-        PlayerState playerState = playerStateObj.AddComponent<PlayerState>();
-        
-        // Add marker component for tracking
-        playerStateObj.AddComponent<TemporaryPlayerStateMarker>();
-        
-        // Initialize temporary monster
-        yield return StartCoroutine(InitializeTempPlayerMonster(playerState));
-        
-        // Register with GameState
-        if (GameState.Instance != null)
-        {
-            GameState.Instance.RegisterPlayer(runner.LocalPlayer, playerState);
-            GameManager.Instance.LogManager.LogMessage("Manually registered temporary player state");
-            
-            // Wait a frame for registration to complete
-            yield return null;
-        }
-        else
-        {
-            GameManager.Instance.LogManager.LogError("GameState.Instance is null, cannot register player");
-        }
-    }
+    // Removed temporary state creation methods:
+    // private IEnumerator CreateTemporaryPlayerState(NetworkRunner runner) { ... }
+    // private IEnumerator InitializeTempPlayerMonster(PlayerState playerState) { ... }
 
-    // Initialize a default monster for the temporary player
-    private IEnumerator InitializeTempPlayerMonster(PlayerState playerState)
-    {
-        try
-        {
-            // Use reflection to access and initialize the monster field directly
-            System.Reflection.FieldInfo monsterField = typeof(PlayerState).GetField("_playerMonster", 
-                                                    System.Reflection.BindingFlags.NonPublic | 
-                                                    System.Reflection.BindingFlags.Instance);
-            
-            if (monsterField != null)
-            {
-                Monster monster = new Monster
-                {
-                    Name = "Temporary Monster",
-                    Health = 40,
-                    MaxHealth = 40,
-                    Attack = 5,
-                    Defense = 3,
-                    TintColor = new Color(0.8f, 0.2f, 0.2f) // Red tint
-                };
-                
-                monsterField.SetValue(playerState, monster);
-                GameManager.Instance.LogManager.LogMessage("Created temporary monster for player");
-            }
-            else
-            {
-                GameManager.Instance.LogManager.LogMessage("Could not find _playerMonster field");
-            }
-        }
-        catch (System.Exception ex)
-        {
-            GameManager.Instance.LogManager.LogMessage($"Failed to initialize monster: {ex.Message}");
-        }
-        
-        yield return null;
-    }
 
+    // Creates the GameUI object and initializes it
     private void CreateGameUI()
     {
-        // Create game UI object
-        _gameUIObject = new GameObject("GameUI");
-        DontDestroyOnLoad(_gameUIObject);
-        
-        // Add UI component
+         if (_gameUIObject != null)
+         {
+              GameManager.Instance?.LogManager?.LogMessage("GameUI object already exists.");
+              return; // Avoid creating multiple
+         }
+        // Create game UI root object
+        _gameUIObject = new GameObject("GameUI_Root"); // Specific name
+        // Consider parenting strategy if needed, e.g., under GameManager?
+        // DontDestroyOnLoad(_gameUIObject); // Manage lifecycle carefully
+
+        // Add the GameUI component which handles its own setup
         _gameUI = _gameUIObject.AddComponent<GameUI>();
-        
-        // Initialize UI (will be deferred until GameState is available)
-        _gameUI.Initialize();
-        
-        GameManager.Instance.LogManager.LogMessage("Game UI created and initialized");
+        _gameUI.Initialize(); // GameUI has its own internal initialization checks
+
+        GameManager.Instance?.LogManager?.LogMessage("GameUI object created and Initialize() called.");
     }
 
-    // Start the gameplay once all setup is complete
+    // Starts the actual gameplay logic via GameState
     public void StartGameplay()
     {
+         // Ensure initialization completed and gameplay hasn't already started
         if (!_gameInitialized || _gameplayStarted)
         {
-            GameManager.Instance.LogManager.LogError($"Cannot start gameplay: Initialized={_gameInitialized}, Already Started={_gameplayStarted}");
+            GameManager.Instance?.LogManager?.LogError($"Cannot start gameplay: Initialized={_gameInitialized}, Already Started={_gameplayStarted}");
             return;
         }
-        
-        if (GameState.Instance == null)
+
+        if (GameState.Instance == null || !GameState.Instance.IsSpawned())
         {
-            GameManager.Instance.LogManager.LogError("Cannot start gameplay: GameState is null!");
+            GameManager.Instance?.LogManager?.LogError("Cannot start gameplay: GameState is null or not spawned!");
             return;
         }
-        
-        if (!GameState.Instance.IsSpawned())
-        {
-            GameManager.Instance.LogManager.LogError("Cannot start gameplay: GameState is not spawned!");
-            return;
-        }
-        
+
         _gameplayStarted = true;
-        
-        // Start the game with the GameState that was spawned on the network
-        GameState.Instance.StartGame();
-        
-        GameManager.Instance.LogManager.LogMessage("Gameplay started!");
+        // Tell the authoritative GameState to start the game logic (assign matchups, etc.)
+        GameState.Instance.StartGame(); // GameState.StartGame should handle authority check
+        GameManager.Instance?.LogManager?.LogMessage("Gameplay start initiated via GameState.StartGame()!");
     }
-    
-    // Clean up game objects and systems
+
+    // Clean up game objects and systems when game ends or returns to lobby
     public void CleanupGame()
     {
-        if (!_gameInitialized) return;
-        
-        GameManager.Instance.LogManager.LogMessage("Cleaning up game systems...");
-        
-        StopAllCoroutines();
-        
-        // Destroy game UI
+        GameManager.Instance?.LogManager?.LogMessage("Cleaning up GameInitializer systems...");
+        StopAllCoroutines(); // Stop initialization coroutine if running
+
+        // Destroy game UI if it exists
         if (_gameUIObject != null)
         {
             Destroy(_gameUIObject);
             _gameUIObject = null;
             _gameUI = null;
+            GameManager.Instance?.LogManager?.LogMessage("Destroyed GameUI_Root object.");
         }
-        
+
         // Reset flags
         _gameInitialized = false;
         _gameplayStarted = false;
         _initializationInProgress = false;
-        
-        GameManager.Instance.LogManager.LogMessage("Game systems cleaned up");
+
+        GameManager.Instance?.LogManager?.LogMessage("GameInitializer systems cleaned up.");
     }
-    
+
     private void OnDestroy()
     {
-        // Clean up any remaining objects
+        // Ensure cleanup happens if the initializer object itself is destroyed
         CleanupGame();
     }
 }
