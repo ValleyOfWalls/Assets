@@ -344,16 +344,18 @@ public class GameState : NetworkBehaviour
 // FIXED: Properly isolate player turn changes
 public bool NextTurn(PlayerRef player)
 {
+    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    
     if (!_isSpawned || !HasStateAuthority || !GameActive)
     {
-        GameManager.Instance.LogManager.LogError($"NextTurn precondition failed: Spawned={_isSpawned}, Authority={HasStateAuthority}, GameActive={GameActive}");
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - NextTurn precondition failed: Spawned={_isSpawned}, Authority={HasStateAuthority}, GameActive={GameActive}");
         return false;
     }
     
     // Check that we're only processing turn change for a known player
     if (!_playerStates.ContainsKey(player))
     {
-        GameManager.Instance.LogManager.LogError($"NextTurn called for unknown player: {player}");
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - NextTurn called for unknown player: {player}");
         return false;
     }
     
@@ -370,98 +372,63 @@ public bool NextTurn(PlayerRef player)
         // Simulate monster's turn after a short delay FOR THIS PLAYER ONLY
         StartCoroutine(SimulateMonsterTurn(player));
         
-        GameManager.Instance.LogManager.LogMessage($"Player {player}'s turn ended, monster's turn started");
+        GameManager.Instance.LogManager.LogMessage($"[{debugId}] Player {player}'s turn ended, monster's turn started");
         return true;
     }
-    // If it's the monster's turn ending
-    else if (_isMonsterTurn.ContainsKey(player) && _isMonsterTurn[player])
+    // If it's the monster's turn ending - should be handled by SimulateMonsterTurn
+    else
     {
-        // IMPORTANT: This method should not be called directly for monster turn end
-        // Instead, SimulateMonsterTurn handles this case to avoid turn handling issues
-        GameManager.Instance.LogManager.LogMessage($"NextTurn called for monster turn end - should use SimulateMonsterTurn instead");
-        
-        // For backward compatibility, we'll handle it anyway but log the message
-        
-        // Increment player's turn count FOR THIS PLAYER ONLY
-        if (_playerTurnCount.ContainsKey(player))
-        {
-            _playerTurnCount[player]++;
-            GameManager.Instance.LogManager.LogMessage($"Player {player} starting turn #{_playerTurnCount[player]}");
-        }
-        
-        // Set back to player's turn FOR THIS PLAYER ONLY
-        _isPlayerTurn[player] = true;
-        _isMonsterTurn[player] = false;
-        
-        // Refresh THIS player's resources for the next turn
-        if (_playerStates.TryGetValue(player, out PlayerState playerState))
-        {
-            if (playerState.HasStateAuthority)
-            {
-                // Reset energy to max
-                playerState.ModifyEnergy(playerState.MaxEnergy - playerState.Energy);
-                
-                // Draw new cards FOR THIS PLAYER ONLY
-                GameManager.Instance.LogManager.LogMessage($"Drawing new hand ONLY for player {player}");
-                RPC_DrawNewHandForSpecificPlayer(player);
-            }
-        }
-        
-        // Notify THIS player it's their turn again
-        RPC_NotifyPlayerTurnState(player, true);
-        
-        GameManager.Instance.LogManager.LogMessage($"Monster's turn for player {player} ended, player's turn started");
-        
-        // Check if this completed a round for this player
-        CheckPlayerRoundComplete(player);
-        
-        return true;
+        GameManager.Instance.LogManager.LogError($"[{debugId}] NextTurn called during monster's turn - unexpected flow, use SimulateMonsterTurn instead");
+        return false;
     }
-    
-    GameManager.Instance.LogManager.LogError($"Invalid turn state for player {player}");
-    return false;
 }
+
     
     // FIXED: Improved RPC to force drawing cards with better logging
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_ForceDrawNewHandForPlayer(PlayerRef playerRef)
+private void RPC_ForceDrawNewHandForPlayer(PlayerRef playerRef)
+{
+    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] RPC_ForceDrawNewHandForPlayer received for player {playerRef}");
+    
+    bool playerFound = false;
+    
+    // Try to find player in _playerStates dictionary
+    if (_playerStates.TryGetValue(playerRef, out PlayerState playerState))
     {
-        bool playerFound = false;
+        playerFound = true;
+        string playerName = playerState.PlayerName.ToString();
+        GameManager.Instance.LogManager.LogMessage($"[{debugId}] FOUND PLAYER - Drawing new hand for {playerName} (Player {playerRef})");
         
-        // Try to find player in _playerStates dictionary
-        if (_playerStates.TryGetValue(playerRef, out PlayerState playerState))
-        {
-            playerFound = true;
-            GameManager.Instance.LogManager.LogMessage($"RPC_ForceDrawNewHandForPlayer: Drawing new hand for {playerState.PlayerName} (Player {playerRef})");
-            
-            // Bypass authority checks directly with specialized method
-            playerState.ForceDrawNewHandDirectly();
-        }
+        // Bypass authority checks directly with specialized method
+        playerState.ForceDrawNewHandDirectly();
+    }
+    
+    // If not found through dictionary, try searching all player states
+    if (!playerFound)
+    {
+        GameManager.Instance.LogManager.LogError($"[{debugId}] PLAYER NOT FOUND - Could not find PlayerState for Player {playerRef} in dictionary!");
         
-        // If not found through dictionary, try searching all player states
-        if (!playerFound)
+        // Try to find the player another way - search all PlayerState objects
+        PlayerState[] allPlayerStates = UnityEngine.Object.FindObjectsByType<PlayerState>(FindObjectsSortMode.None);
+        foreach (PlayerState ps in allPlayerStates)
         {
-            GameManager.Instance.LogManager.LogError($"RPC_ForceDrawNewHandForPlayer: Could not find PlayerState for Player {playerRef} in dictionary!");
-            
-            // Try to find the player another way - perhaps by searching all PlayerState objects
-            PlayerState[] allPlayerStates = UnityEngine.Object.FindObjectsByType<PlayerState>(FindObjectsSortMode.None);
-            foreach (PlayerState ps in allPlayerStates)
+            if (ps.Object.InputAuthority == playerRef)
             {
-                if (ps.Object.InputAuthority == playerRef)
-                {
-                    GameManager.Instance.LogManager.LogMessage($"Found PlayerState through search: {ps.PlayerName}");
-                    ps.ForceDrawNewHandDirectly();
-                    playerFound = true;
-                    break;
-                }
+                string playerName = ps.PlayerName.ToString();
+                GameManager.Instance.LogManager.LogMessage($"[{debugId}] FOUND THROUGH SEARCH - Found {playerName} through object search");
+                ps.ForceDrawNewHandDirectly();
+                playerFound = true;
+                break;
             }
         }
-        
-        if (!playerFound)
-        {
-            GameManager.Instance.LogManager.LogError($"CRITICAL: Could not find PlayerState for {playerRef} by any method!");
-        }
     }
+    
+    if (!playerFound)
+    {
+        GameManager.Instance.LogManager.LogError($"[{debugId}] CRITICAL ERROR - Could not find PlayerState for {playerRef} by any method!");
+    }
+}
     
     // Check if the player completed a round - you can define this based on turn count
     private void CheckPlayerRoundComplete(PlayerRef player)
@@ -528,27 +495,27 @@ public bool NextTurn(PlayerRef player)
     // FIXED: Improved monster turn simulation with proper player isolation
 private IEnumerator SimulateMonsterTurn(PlayerRef player)
 {
-    GameManager.Instance.LogManager.LogMessage($"Starting monster turn simulation for player {player} ONLY");
+    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] START - Monster turn simulation for player {player}");
     
     // Wait a short time to simulate monster thinking
     yield return new WaitForSeconds(1.0f);
     
     // For now, just immediately end the monster's turn
     // In the future, implement monster AI actions here
-    GameManager.Instance.LogManager.LogMessage($"Monster turn simulation completed for player {player}");
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] COMPLETE - Monster turn simulation for player {player}");
     
     // CRITICAL FIX: Only send turn end for the specific player whose monster just acted
     if (HasStateAuthority)
     {
-        // Do not call NextTurn here, which might be affecting all players
-        // Instead, directly manage just this player's turn
+        // Directly manage just this player's turn
         if (_isMonsterTurn.ContainsKey(player) && _isMonsterTurn[player])
         {
             // Increment player's turn count
             if (_playerTurnCount.ContainsKey(player))
             {
                 _playerTurnCount[player]++;
-                GameManager.Instance.LogManager.LogMessage($"Player {player} starting turn #{_playerTurnCount[player]}");
+                GameManager.Instance.LogManager.LogMessage($"[{debugId}] TURN INCREMENT - Player {player} starting turn #{_playerTurnCount[player]}");
             }
             
             // Set back to player's turn for THIS PLAYER ONLY
@@ -563,28 +530,32 @@ private IEnumerator SimulateMonsterTurn(PlayerRef player)
                     // Reset energy to max
                     playerState.ModifyEnergy(playerState.MaxEnergy - playerState.Energy);
                     
-                    // Draw new cards for THIS PLAYER ONLY
-                    GameManager.Instance.LogManager.LogMessage($"Drawing new hand ONLY for player {player} after their monster's turn");
-                    RPC_DrawNewHandForSpecificPlayer(player);
+                    // CRITICAL FIX: Draw cards specifically for this player BEFORE changing turn state
+                    // This ensures cards are drawn before player gets control
+                    GameManager.Instance.LogManager.LogMessage($"[{debugId}] DRAW CARDS - Explicitly drawing cards for player {player}");
+                    RPC_ForceDrawNewHandForPlayer(player);
+                    
+                    // Give the card drawing RPC time to propagate before notifying about turn change
+                    yield return new WaitForSeconds(0.2f);
                 }
             }
             
-            // Notify THIS player it's their turn again
+            // Notify THIS player it's their turn again AFTER cards have been drawn
             RPC_NotifyPlayerTurnState(player, true);
             
-            GameManager.Instance.LogManager.LogMessage($"Monster's turn for player {player} ended, player's turn started");
+            GameManager.Instance.LogManager.LogMessage($"[{debugId}] TURN CHANGE - Monster's turn for player {player} ended, player's turn started");
             
             // Check if this completed a round for this player
             CheckPlayerRoundComplete(player);
         }
         else
         {
-            GameManager.Instance.LogManager.LogError($"Cannot end monster turn for player {player}: not currently in monster turn state");
+            GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - Cannot end monster turn for player {player}: not in monster turn state");
         }
     }
     else
     {
-        GameManager.Instance.LogManager.LogError($"Cannot end monster turn: no state authority");
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - Cannot end monster turn: no state authority");
     }
 }
 

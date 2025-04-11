@@ -262,44 +262,57 @@ public class PlayerState : NetworkBehaviour
     
     // FIXED: Enhanced method for forced draws with better debugging
     public void ForceDrawNewHandDirectly()
+{
+    // Generate a unique debug ID for tracking this operation
+    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    
+    // Prevent multiple draws happening simultaneously
+    if (_isCurrentlyDrawingCards)
     {
-        // Debug IDs to help track issues
-        string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+        GameManager.Instance.LogManager.LogMessage($"[{debugId}] SKIPPED - Already drawing cards for {PlayerName}");
+        return;
+    }
+    
+    _isCurrentlyDrawingCards = true;
+    
+    try
+    {
+        GameManager.Instance.LogManager.LogMessage($"[{debugId}] START DRAW - Force draw for {PlayerName} (HasStateAuthority: {HasStateAuthority}, InputAuthority: {Object.InputAuthority})");
         
-        if (_isCurrentlyDrawingCards)
-        {
-            GameManager.Instance.LogManager.LogMessage($"[{debugId}] Skipping duplicate ForceDrawNewHandDirectly call for {PlayerName}");
-            return;
-        }
-        
-        _isCurrentlyDrawingCards = true;
-        
-        GameManager.Instance.LogManager.LogMessage($"[{debugId}] Force draw started for {PlayerName} (HasStateAuthority: {HasStateAuthority}, InputAuthority: {Object.InputAuthority})");
-        
-        // Always draw new cards locally - regardless of authority
+        // Always draw locally first regardless of authority
         _cardManager.PrepareForNewRound();
+        List<CardData> hand = _cardManager.GetHand();
         
-        // If we have state authority, update the networked data and notify others
+        // Log the card count
+        GameManager.Instance.LogManager.LogMessage($"[{debugId}] LOCAL CARDS - {hand.Count} cards drawn for {PlayerName}");
+        
+        // If we have authority, update networked state
         if (HasStateAuthority)
         {
-            UpdateNetworkedHand();
-            RPC_NotifyHandChanged();
-            GameManager.Instance.LogManager.LogMessage($"[{debugId}] Networked hand updated for {PlayerName}");
-        }
-        else
-        {
-            // If we don't have authority, we still want to ensure our local data is updated
-            List<CardData> hand = _cardManager.GetHand();
-            GameManager.Instance.LogManager.LogMessage($"[{debugId}] Local-only draw for {PlayerName} with {hand.Count} cards");
+            // Update networked hand
+            UpdateNetworkedHand(debugId);
             
-            // Notify UI (even without authority)
-            OnHandChanged?.Invoke(this, hand);
+            // Use RPC to ensure all clients see the change
+            RPC_NotifyHandChanged(debugId);
+            
+            GameManager.Instance.LogManager.LogMessage($"[{debugId}] NETWORK UPDATED - Hand data sent to network for {PlayerName}");
         }
         
-        _isCurrentlyDrawingCards = false;
+        // Always notify UI about the change - even without authority
+        OnHandChanged?.Invoke(this, hand);
         
-        GameManager.Instance.LogManager.LogMessage($"[{debugId}] Force draw completed for {PlayerName}");
+        GameManager.Instance.LogManager.LogMessage($"[{debugId}] COMPLETE - Force draw completed for {PlayerName} with {hand.Count} cards");
     }
+    catch (Exception ex)
+    {
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - Force draw failed for {PlayerName}: {ex.Message}");
+    }
+    finally
+    {
+        _isCurrentlyDrawingCards = false;
+    }
+}
+
     
     // MODIFIED: Changed to use authority check more carefully
     public void DrawNewHandForTurn()
@@ -372,78 +385,108 @@ public class PlayerState : NetworkBehaviour
         DrawNewHandImpl();
     }
     
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    private void RPC_NotifyHandChanged()
-    {
-        // Force a local update of the hand from networked data
-        UpdateLocalHandFromNetworked();
-    }
+   // Added parameter for debug tracking
+[Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+private void RPC_NotifyHandChanged(string debugId = "")
+{
+    if (string.IsNullOrEmpty(debugId))
+        debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] RPC_NotifyHandChanged received for {PlayerName}");
+    
+    // Force a local update of the hand from networked data
+    UpdateLocalHandFromNetworked(debugId);
+    
+    // Get current hand data for logging and UI notification
+    List<CardData> handData = _cardManager.GetHand();
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] Hand updated from network for {PlayerName} with {handData.Count} cards");
+    
+    // Always notify UI about the change
+    OnHandChanged?.Invoke(this, handData);
+}
 
     // Update networked hand from local hand
-    private void UpdateNetworkedHand()
+    private void UpdateNetworkedHand(string debugId = "")
+{
+    if (string.IsNullOrEmpty(debugId))
+        debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    
+    if (!HasStateAuthority)
     {
-        if (!HasStateAuthority)
-        {
-            GameManager.Instance.LogManager.LogError($"UpdateNetworkedHand called without state authority for {PlayerName}");
-            return;
-        }
-        
-        NetworkedCardData[] networkedHand = _cardManager.GetNetworkedHand(MAX_HAND_SIZE);
-        
-        // Update networked array
-        for (int i = 0; i < networkedHand.Length; i++)
-        {
-            _networkedHand.Set(i, networkedHand[i]);
-        }
-        
-        GameManager.Instance.LogManager.LogMessage($"Updated networked hand for {PlayerName}");
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - UpdateNetworkedHand called without state authority for {PlayerName}");
+        return;
     }
+    
+    NetworkedCardData[] networkedHand = _cardManager.GetNetworkedHand(MAX_HAND_SIZE);
+    
+    // Log information about the hand being sent to the network
+    List<string> cardNames = new List<string>();
+    for (int i = 0; i < networkedHand.Length && !string.IsNullOrEmpty(networkedHand[i].Name.ToString()); i++)
+    {
+        cardNames.Add(networkedHand[i].Name.ToString());
+    }
+    
+    // Update networked array
+    for (int i = 0; i < networkedHand.Length; i++)
+    {
+        _networkedHand.Set(i, networkedHand[i]);
+    }
+    
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] NETWORK UPDATE - Updated networked hand for {PlayerName} with {cardNames.Count} cards");
+}
+
 
     // Update local hand from networked data with extra debugging
-    private void UpdateLocalHandFromNetworked()
+    private void UpdateLocalHandFromNetworked(string debugId = "")
+{
+    if (string.IsNullOrEmpty(debugId))
+        debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] START - UpdateLocalHandFromNetworked for {PlayerName}");
+    
+    // Copy networked data to local array
+    NetworkedCardData[] networkedHand = new NetworkedCardData[_networkedHand.Length];
+    int validCardCount = 0;
+    
+    for (int i = 0; i < _networkedHand.Length; i++)
     {
-        // Debug ID to track this specific update
-        string updateId = UnityEngine.Random.Range(1000, 9999).ToString();
+        networkedHand[i] = _networkedHand[i];
         
-        GameManager.Instance.LogManager.LogMessage($"[{updateId}] Starting UpdateLocalHandFromNetworked for {PlayerName}");
-        
-        // Create a new array to hold the networked data
-        NetworkedCardData[] networkedHand = new NetworkedCardData[_networkedHand.Length];
-        
-        // Copy networked data to local array
-        for (int i = 0; i < _networkedHand.Length; i++)
+        // Count only non-empty cards
+        if (!string.IsNullOrEmpty(networkedHand[i].Name.ToString()))
         {
-            networkedHand[i] = _networkedHand[i];
+            validCardCount++;
         }
-        
-        // Before updating, log the current state
-        int startingCardCount = _cardManager.GetHand().Count;
-        GameManager.Instance.LogManager.LogMessage($"[{updateId}] Before update: {startingCardCount} cards in hand");
-        
-        // Update local hand
-        _cardManager.UpdateFromNetworkedHand(networkedHand);
-        
-        // Get the current hand for logging
-        List<CardData> handData = _cardManager.GetHand();
-        int newCardCount = handData.Count;
-        
-        // Log details about the update
-        GameManager.Instance.LogManager.LogMessage($"[{updateId}] Hand updated for {PlayerName}: {startingCardCount} → {newCardCount} cards");
-        
-        if (newCardCount > 0)
-        {
-            // Log some card names as verification
-            string cardSample = handData[0].Name;
-            if (newCardCount > 1)
-            {
-                cardSample += ", " + handData[1].Name;
-            }
-            GameManager.Instance.LogManager.LogMessage($"[{updateId}] Sample cards in hand: {cardSample}");
-        }
-        
-        // Notify UI
-        OnHandChanged?.Invoke(this, handData);
     }
+    
+    // Log the current state before update
+    int startingCardCount = _cardManager.GetHand().Count;
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] BEFORE UPDATE - {startingCardCount} cards in hand. Network has {validCardCount} valid cards");
+    
+    // Update local hand
+    _cardManager.UpdateFromNetworkedHand(networkedHand);
+    
+    // Get the current hand for logging
+    List<CardData> handData = _cardManager.GetHand();
+    int newCardCount = handData.Count;
+    
+    // Log details about the update
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] AFTER UPDATE - Hand updated for {PlayerName}: {startingCardCount} → {newCardCount} cards");
+    
+    if (newCardCount > 0)
+    {
+        // Log the first few cards for verification
+        List<string> cardNames = new List<string>();
+        for (int i = 0; i < Math.Min(3, handData.Count); i++)
+        {
+            cardNames.Add(handData[i].Name);
+        }
+        GameManager.Instance.LogManager.LogMessage($"[{debugId}] SAMPLE CARDS - First cards: {string.Join(", ", cardNames)}");
+    }
+    
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] COMPLETE - UpdateLocalHandFromNetworked completed for {PlayerName}");
+}
+
 
     // Add RPC to broadcast stat changes to all clients
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
@@ -751,34 +794,37 @@ public class PlayerState : NetworkBehaviour
 
     // FIXED: Improved EndTurn method with better error handling
     public void EndTurn()
+{
+    string debugId = UnityEngine.Random.Range(1000, 9999).ToString();
+    
+    if (GameState.Instance == null)
     {
-        if (GameState.Instance == null)
-        {
-            GameManager.Instance.LogManager.LogError("EndTurn failed: GameState.Instance is null");
-            return;
-        }
-        
-        var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
-        if (networkRunner == null)
-        {
-            GameManager.Instance.LogManager.LogError("EndTurn failed: NetworkRunner is null");
-            return;
-        }
-        
-        PlayerRef localPlayer = Object.InputAuthority;
-        
-        if (localPlayer == default)
-        {
-            GameManager.Instance.LogManager.LogError("EndTurn failed: Invalid local player reference");
-            return;
-        }
-        
-        // Add more info to the logs to help with debugging
-        GameManager.Instance.LogManager.LogMessage($"Player {PlayerName} (ID: {localPlayer.PlayerId}) ending turn. HasStateAuthority: {HasStateAuthority}, InputAuthority: {Object.InputAuthority.PlayerId}");
-        
-        // Send the turn end request directly to GameState via RPC
-        GameState.Instance.RPC_RequestEndTurn(localPlayer);
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - EndTurn failed: GameState.Instance is null");
+        return;
     }
+    
+    var networkRunner = GameManager.Instance?.NetworkManager?.GetRunner();
+    if (networkRunner == null)
+    {
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - EndTurn failed: NetworkRunner is null");
+        return;
+    }
+    
+    PlayerRef localPlayer = Object.InputAuthority;
+    
+    if (localPlayer == default)
+    {
+        GameManager.Instance.LogManager.LogError($"[{debugId}] ERROR - EndTurn failed: Invalid local player reference");
+        return;
+    }
+    
+    // Add more info to the logs to help with debugging
+    GameManager.Instance.LogManager.LogMessage($"[{debugId}] END TURN - Player {PlayerName} (ID: {localPlayer.PlayerId}) ending turn. HasStateAuthority: {HasStateAuthority}, InputAuthority: {Object.InputAuthority.PlayerId}");
+    
+    // Send the turn end request directly to GameState via RPC
+    GameState.Instance.RPC_RequestEndTurn(localPlayer);
+}
+
     
     public List<CardData> GetHand()
     {
