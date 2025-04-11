@@ -19,22 +19,22 @@ public class GameState : NetworkBehaviour
     
     [Networked] public int RoundsToWin { get; set; }
 
-    // NEW: Dictionary to track active turns per player
+    // Dictionary to track active turns per player
     // We can't directly network a dictionary, so we'll use RPCs to sync this
     private Dictionary<PlayerRef, bool> _isPlayerTurn = new Dictionary<PlayerRef, bool>();
     private Dictionary<PlayerRef, bool> _isMonsterTurn = new Dictionary<PlayerRef, bool>();
     
-    // FIX: Add tracking for turn sequence
-    private Dictionary<PlayerRef, bool> _hasCompletedFullTurn = new Dictionary<PlayerRef, bool>();
+    // NEW: Dictionary to track player turn counts
+    private Dictionary<PlayerRef, int> _playerTurnCount = new Dictionary<PlayerRef, int>();
     
-    // CURRENT ROUND PROGRESS
-    // Track how many players have completed their turns in this round
+    // For global round tracking - will only advance when all players trigger a round completion
+    private Dictionary<PlayerRef, bool> _hasCompletedRound = new Dictionary<PlayerRef, bool>();
     private int _playersCompletedThisRound = 0;
 
     // Events
     public static event Action<int> OnRoundChanged;
     public static event Action<bool> OnDraftPhaseChanged;
-    public static event Action<PlayerRef, bool> OnPlayerTurnChanged; // MODIFIED: Changed parameter
+    public static event Action<PlayerRef, bool> OnPlayerTurnChanged;
     public static event Action<bool> OnGameActiveChanged;
     public static event Action OnRoundComplete;
     public static event Action OnGameComplete;
@@ -102,8 +102,11 @@ public class GameState : NetworkBehaviour
                 _isPlayerTurn[player] = true;
                 _isMonsterTurn[player] = false;
                 
-                // FIX: Initialize the turn completion tracker
-                _hasCompletedFullTurn[player] = false;
+                // Initialize turn count to 1
+                _playerTurnCount[player] = 1;
+                
+                // Initialize round completion tracking
+                _hasCompletedRound[player] = false;
                 
                 // Notify the player that their turn has started
                 RPC_NotifyPlayerTurnState(player, true);
@@ -130,7 +133,8 @@ public class GameState : NetworkBehaviour
             _allPlayers.Remove(player);
             _isPlayerTurn.Remove(player);
             _isMonsterTurn.Remove(player);
-            _hasCompletedFullTurn.Remove(player);
+            _playerTurnCount.Remove(player);
+            _hasCompletedRound.Remove(player);
             
             if (GameManager.Instance != null)
                 GameManager.Instance.LogManager.LogMessage($"Player {player} unregistered from GameState");
@@ -145,10 +149,11 @@ public class GameState : NetworkBehaviour
             CurrentRound = 1;
             _playersCompletedThisRound = 0;
             
-            // FIX: Reset the turn completion tracker
+            // Reset the round completion tracker
             foreach (var player in _allPlayers)
             {
-                _hasCompletedFullTurn[player] = false;
+                _hasCompletedRound[player] = false;
+                _playerTurnCount[player] = 1;
             }
             
             if (GameManager.Instance != null)
@@ -186,7 +191,6 @@ public class GameState : NetworkBehaviour
                 // Set this player's turn to active
                 _isPlayerTurn[player] = true;
                 _isMonsterTurn[player] = false;
-                _hasCompletedFullTurn[player] = false;
                 
                 // Notify the player that it's their turn
                 RPC_NotifyPlayerTurnState(player, true);
@@ -197,7 +201,7 @@ public class GameState : NetworkBehaviour
         OnGameActiveChanged?.Invoke(true);
     }
     
-    // FIX: New RPC method to handle turn end requests from any client
+    // New RPC method to handle turn end requests from any client
     [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
     public void RPC_RequestEndTurn(PlayerRef player)
     {
@@ -231,7 +235,7 @@ public class GameState : NetworkBehaviour
         }
     }
     
-    // NEW RPC: Notify player about their turn state
+    // Notify player about their turn state
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyPlayerTurnState(PlayerRef player, bool isPlayerTurn)
     {
@@ -262,7 +266,7 @@ public class GameState : NetworkBehaviour
         StartCoroutine(DelayedForceCardDraw());
     }
     
-    // METHOD: Delayed force card draw to ensure all players get cards
+    // Delayed force card draw to ensure all players get cards
     private IEnumerator DelayedForceCardDraw()
     {
         // Wait a short time to allow normal draws to complete
@@ -335,8 +339,7 @@ public class GameState : NetworkBehaviour
         }
     }
 
-    // FIX: Modified NextTurn to properly handle turn transitions and resource refreshing
-    // Also added return boolean to indicate success
+    // FIXED: NextTurn now forces card drawing directly rather than relying on PlayerState authority
     public bool NextTurn(PlayerRef player)
     {
         if (!_isSpawned || !HasStateAuthority || !GameActive)
@@ -361,20 +364,27 @@ public class GameState : NetworkBehaviour
         // If it's the monster's turn ending
         else if (_isMonsterTurn.ContainsKey(player) && _isMonsterTurn[player])
         {
+            // Increment player's turn count
+            if (_playerTurnCount.ContainsKey(player))
+            {
+                _playerTurnCount[player]++;
+                GameManager.Instance.LogManager.LogMessage($"Player {player} starting turn #{_playerTurnCount[player]}");
+            }
+            
             // Set back to player's turn
             _isPlayerTurn[player] = true;
             _isMonsterTurn[player] = false;
             
-            // Mark this player as having completed a full turn cycle
-            _hasCompletedFullTurn[player] = true;
-            
             // Refresh player's resources for the next turn
             if (_playerStates.TryGetValue(player, out PlayerState playerState))
             {
-                // FIX: Ensure energy refreshes to max after monster turn
+                // Reset energy to max
                 if (playerState.HasStateAuthority)
                 {
                     playerState.ModifyEnergy(playerState.MaxEnergy - playerState.Energy);
+                    
+                    // CRITICAL FIX: Force RPC to draw new cards for this player, bypassing authority check
+                    RPC_ForceDrawNewHandForPlayer(player);
                 }
             }
             
@@ -383,8 +393,9 @@ public class GameState : NetworkBehaviour
             
             GameManager.Instance.LogManager.LogMessage($"Monster's turn for player {player} ended, player's turn started");
             
-            // Check if all players have completed their turns
-            CheckRoundCompletion();
+            // Check if this completed a round for this player (could be based on turn count)
+            CheckPlayerRoundComplete(player);
+            
             return true;
         }
         
@@ -392,27 +403,55 @@ public class GameState : NetworkBehaviour
         return false;
     }
     
-    // FIX: Separate method to check for round completion
-    private void CheckRoundCompletion()
+    // NEW: Force draw cards for a specific player using direct RPC
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    private void RPC_ForceDrawNewHandForPlayer(PlayerRef playerRef)
+    {
+        if (_playerStates.TryGetValue(playerRef, out PlayerState playerState))
+        {
+            GameManager.Instance.LogManager.LogMessage($"Forced drawing new hand for {playerState.PlayerName}");
+            
+            // Call DrawNewHandForTurn directly - it will check authority
+            playerState.DrawNewHandForTurn();
+        }
+    }
+    
+    // Check if the player completed a round - you can define this based on turn count
+    private void CheckPlayerRoundComplete(PlayerRef player)
+    {
+        // For demonstration, let's say a "round" for a player is 3 turns
+        // This would be adjusted based on your game design
+        if (_playerTurnCount.TryGetValue(player, out int turnCount) && turnCount % 3 == 0)
+        {
+            // Player completed a round
+            GameManager.Instance.LogManager.LogMessage($"Player {player} completed a round!");
+            _hasCompletedRound[player] = true;
+            
+            // Check if all players have completed this round
+            CheckAllPlayersRoundComplete();
+        }
+    }
+    
+    // Check if all players have completed their rounds
+    private void CheckAllPlayersRoundComplete()
     {
         if (!HasStateAuthority)
             return;
             
-        // Count players who have completed their turns
+        // Count players who have completed their rounds
         int completedCount = 0;
-        foreach (var entry in _hasCompletedFullTurn)
+        foreach (var entry in _hasCompletedRound)
         {
             if (entry.Value)
                 completedCount++;
         }
         
         _playersCompletedThisRound = completedCount;
-        GameManager.Instance.LogManager.LogMessage($"{_playersCompletedThisRound} players have completed their turns this round");
         
-        // If all players have completed a turn, end the round
+        // If all players have completed a round, advance the global round
         if (_playersCompletedThisRound >= _allPlayers.Count)
         {
-            // All players have finished their turns
+            // All players have finished their rounds
             RoundComplete = true;
             RPC_TriggerRoundComplete();
             
@@ -424,21 +463,21 @@ public class GameState : NetworkBehaviour
                 return;
             }
             
-            // Start draft phase
+            // Start draft phase - this is a global state
             DraftPhaseActive = true;
             OnDraftPhaseChanged?.Invoke(true);
             GenerateDraftOptions();
             
-            // Reset counter and turn completion flags
+            // Reset counters for next round
             _playersCompletedThisRound = 0;
             foreach (var player in _allPlayers)
             {
-                _hasCompletedFullTurn[player] = false;
+                _hasCompletedRound[player] = false;
             }
         }
     }
     
-    // NEW: Simulate monster's turn
+    // Simulate monster's turn
     private IEnumerator SimulateMonsterTurn(PlayerRef player)
     {
         // Wait a short time to simulate monster thinking
@@ -493,14 +532,13 @@ public class GameState : NetworkBehaviour
         StartNextRound();
     }
 
-    // FIX: Improved StartNextRound to properly reset player states
+    // StartNextRound advances the global round counter
     private void StartNextRound()
     {
         if (_isSpawned && HasStateAuthority)
         {
             CurrentRound++;
             RoundComplete = false;
-            _playersCompletedThisRound = 0;
             
             // Notify clients
             RPC_RoundChanged(CurrentRound);
@@ -508,27 +546,30 @@ public class GameState : NetworkBehaviour
             // Reset player state for new round
             foreach (var playerEntry in _playerStates)
             {
-                // Reset turn completion tracking
-                if (_hasCompletedFullTurn.ContainsKey(playerEntry.Key))
-                {
-                    _hasCompletedFullTurn[playerEntry.Key] = false;
-                }
-                
-                // Prepare player state for new round (replenish energy, draw cards, etc.)
+                // Reset monster health etc.
                 playerEntry.Value.PrepareForNewRound();
+                
+                // Reset round completion tracking
+                if (_hasCompletedRound.ContainsKey(playerEntry.Key))
+                {
+                    _hasCompletedRound[playerEntry.Key] = false;
+                }
             }
             
             // Assign new monster matchups
             AssignMonsterMatchups();
             
-            // Start every player's turn for the new round
+            // Ensure each player is in the correct turn state
             foreach (var player in _allPlayers)
             {
-                // Set this player's turn to active
+                // Set each player to player turn
                 _isPlayerTurn[player] = true;
                 _isMonsterTurn[player] = false;
                 
-                // Notify the player that it's their turn
+                // IMPORTANT: Force draw cards for each player at the start of a new global round
+                RPC_ForceDrawNewHandForPlayer(player);
+                
+                // Notify the player
                 RPC_NotifyPlayerTurnState(player, true);
             }
         }
@@ -578,7 +619,7 @@ public class GameState : NetworkBehaviour
         return networkRunner?.LocalPlayer ?? default;
     }
 
-    // NEW: Helper method to get a PlayerState by PlayerRef
+    // Helper method to get a PlayerState by PlayerRef
     public PlayerState GetPlayerState(PlayerRef playerRef)
     {
         if (_playerStates.TryGetValue(playerRef, out PlayerState state))
@@ -588,7 +629,7 @@ public class GameState : NetworkBehaviour
         return null;
     }
 
-    // MODIFIED: Check if it's the local player's turn based on player-specific turn state
+    // Check if it's the local player's turn based on player-specific turn state
     public bool IsLocalPlayerTurn()
     {
         if (!_isSpawned) return false;
@@ -609,6 +650,16 @@ public class GameState : NetworkBehaviour
         return true;
     }
 
+    // Get the current turn number for a player
+    public int GetPlayerTurnCount(PlayerRef player)
+    {
+        if (_playerTurnCount.TryGetValue(player, out int turnCount))
+        {
+            return turnCount;
+        }
+        return 1; // Default to 1 if not found
+    }
+
     // Safe accessors for networked properties
     public int GetCurrentRound()
     {
@@ -625,7 +676,7 @@ public class GameState : NetworkBehaviour
         return _isSpawned && GameActive;
     }
 
-    // MODIFIED: Get turn state for a specific player
+    // Get turn state for a specific player
     public bool IsPlayerTurn(PlayerRef player)
     {
         if (_isPlayerTurn.TryGetValue(player, out bool isPlayerTurn))

@@ -236,6 +236,50 @@ public class PlayerState : NetworkBehaviour
         GameManager.Instance.LogManager.LogMessage($"Force drew initial hand for {PlayerName}");
     }
     
+    // MODIFIED: Changed to use RPC to ensure it works for all players
+    public void DrawNewHandForTurn()
+    {
+        // Send RPC to owner of this state to draw new cards
+        if (HasStateAuthority)
+        {
+            // Draw directly if we have authority
+            DrawNewHandImpl();
+        }
+        else
+        {
+            // Request the state authority to draw for us
+            GameManager.Instance.LogManager.LogMessage($"Requesting hand draw for {PlayerName} via RPC");
+            RPC_RequestDrawNewHand(Object.Id);
+        }
+    }
+    
+    // Implementation of drawing a new hand
+    private void DrawNewHandImpl()
+    {
+        // Reset and draw a new hand of cards
+        _cardManager.PrepareForNewRound();
+        
+        // Update networked hand
+        UpdateNetworkedHand();
+        
+        // Call RPC to ensure all clients update their local hands from networked data
+        RPC_NotifyHandChanged();
+        
+        GameManager.Instance.LogManager.LogMessage($"Drew new hand of cards for {PlayerName}'s turn");
+    }
+    
+    // NEW: RPC to request drawing a new hand from the state authority
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
+    private void RPC_RequestDrawNewHand(NetworkId playerStateId)
+    {
+        if (!HasStateAuthority) return;
+        
+        GameManager.Instance.LogManager.LogMessage($"Received request to draw new hand for {PlayerName}");
+        
+        // Draw the new hand
+        DrawNewHandImpl();
+    }
+    
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyHandChanged()
     {
@@ -445,7 +489,7 @@ public class PlayerState : NetworkBehaviour
         {
             // This is about an opponent's monster
             // First try to update directly via the BattleUIController
-            var gameUI = UnityEngine.Object.FindAnyObjectByType<GameUI>(); // Fixed: Using FindAnyObjectByType instead
+            var gameUI = UnityEngine.Object.FindAnyObjectByType<GameUI>(); // Fixed: Using FindAnyObjectByType
             if (gameUI != null && gameUI.GetBattleUIController() != null)
             {
                 gameUI.GetBattleUIController().UpdateOpponentMonsterHealth(newHealth);
@@ -541,7 +585,7 @@ public class PlayerState : NetworkBehaviour
         _monsterManager.SetOpponentMonster(opponentRef, opponentState);
     }
 
-    // NEW: Add method to get opponent player reference
+    // Add method to get opponent player reference
     public PlayerRef GetOpponentPlayerRef()
     {
         return _opponentPlayerRef;
@@ -562,6 +606,7 @@ public class PlayerState : NetworkBehaviour
         return Score;
     }
 
+    // Reset player for a new round
     public void PrepareForNewRound()
     {
         if (!HasStateAuthority) return;
@@ -573,34 +618,27 @@ public class PlayerState : NetworkBehaviour
         _monsterManager.ResetPlayerMonster();
         UpdateMonsterNetworkedProperties();
         
-        // Reset and draw new cards
-        _cardManager.PrepareForNewRound();
-        
-        // Update networked hand
-        UpdateNetworkedHand();
-        
         // Notify clients about stats changes
         RPC_NotifyStatsChanged();
         
         GameManager.Instance.LogManager.LogMessage($"{PlayerName} ready for new round");
     }
 
-    // FIXED: Complete rewrite of EndTurn to fix authority issues
-    // Replace your PlayerState.EndTurn method with this simplified version
-public void EndTurn()
-{
-    if (GameState.Instance == null)
+    // End player's turn
+    public void EndTurn()
     {
-        GameManager.Instance.LogManager.LogError("GameState.Instance is null in EndTurn");
-        return;
-    }
+        if (GameState.Instance == null)
+        {
+            GameManager.Instance.LogManager.LogError("GameState.Instance is null in EndTurn");
+            return;
+        }
         
-    PlayerRef localPlayer = Object.InputAuthority;
-    
-    // Send the turn end request directly to GameState via RPC
-    GameState.Instance.RPC_RequestEndTurn(localPlayer);
-    GameManager.Instance.LogManager.LogMessage($"{PlayerName} requested to end their turn");
-}
+        PlayerRef localPlayer = Object.InputAuthority;
+        
+        // Send the turn end request directly to GameState via RPC
+        GameState.Instance.RPC_RequestEndTurn(localPlayer);
+        GameManager.Instance.LogManager.LogMessage($"{PlayerName} requested to end their turn");
+    }
     
     // Re-designed RPC with better logging and error handling
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
@@ -642,7 +680,7 @@ public void EndTurn()
         }
     }
     
-    // NEW: RPC to notify all clients about a turn change
+    // RPC to notify all clients about a turn change
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     private void RPC_NotifyTurnChanged(PlayerRef player, bool isPlayerTurn)
     {
