@@ -13,7 +13,7 @@ public class PlayerState : NetworkBehaviour
     [Networked] public int Energy { get; private set; }
     [Networked] public int MaxEnergy { get; private set; }
     [Networked] public int Score { get; private set; }
-    [Networked] public NetworkString<_32> PlayerName { get; private set; } // Max 32 chars
+    [Networked] public NetworkString<_32> PlayerName { get; private set; }
 
     // --- Networked Monster Stats ---
     [Networked] public NetworkString<_32> MonsterName { get; private set; }
@@ -26,7 +26,7 @@ public class PlayerState : NetworkBehaviour
     // --- Networked Fight Status ---
     [Networked] public NetworkBool IsFightComplete { get; private set; }
 
-    // --- Local References and State ---
+    // --- Local References and State (Not Networked) ---
     private PlayerRef _opponentPlayerRef;
     private PlayerState _opponentPlayerState;
     private Monster _opponentMonsterRepresentation;
@@ -35,12 +35,11 @@ public class PlayerState : NetworkBehaviour
     private bool _isPlayerTurnActive = true;
     private bool _isFightOverLocally = false;
     private bool _opponentMonsterDataReady = false;
-    // Removed coroutine reference as we removed the delayed notification attempt
-    // private Coroutine _updateOpponentCoroutine = null;
 
     // --- Fusion v2 Change Detector ---
     private ChangeDetector _changeDetector;
-    // --- Events ---
+
+    // --- Events (Local C# Events for UI/Logic Updates) ---
     public static event Action<PlayerState> OnStatsChanged;
     public static event Action<PlayerState, List<CardData>> OnHandChanged;
     public static event Action<Monster> OnPlayerMonsterChanged;
@@ -63,363 +62,172 @@ public class PlayerState : NetworkBehaviour
 
         if (HasStateAuthority)
         {
-            MaxHealth = STARTING_HEALTH; Health = MaxHealth;
-            MaxEnergy = STARTING_ENERGY; Energy = MaxEnergy;
-            Score = 0; IsFightComplete = false;
-            InitializePlayerName(); // Sets PlayerName Networked property
-             _monsterManager.CreatePlayerMonsterLocally(); // Create local monster
-             UpdateMonsterNetworkedProperties(); // Sync initial monster stats
+            MaxHealth = STARTING_HEALTH; Health = MaxHealth; MaxEnergy = STARTING_ENERGY;
+            Energy = MaxEnergy; Score = 0; IsFightComplete = false;
+            InitializePlayerName();
+             if (_monsterManager != null) { _monsterManager.CreatePlayerMonsterLocally(); UpdateMonsterNetworkedProperties(); }
         }
-        UpdateLocalMonsterRepresentationFromNetworked(); // Sync local visuals for own monster
+        UpdateLocalMonsterRepresentationFromNetworked(); UpdateLocalOpponentRepresentation();
         StartCoroutine(RegisterWithGameStateWhenAvailable());
-        if (Object.HasInputAuthority) DrawInitialHandLocally(); // Draw if local player
-
-        // GameManager.Instance?.LogManager?.LogMessage($"PlayerState spawned for {PlayerName} (ID: {Id}, InputAuth: {Object.HasInputAuthority})");
+        if (Object.HasInputAuthority) DrawInitialHandLocally();
+        OnStatsChanged?.Invoke(this);
     }
 
     private IEnumerator RegisterWithGameStateWhenAvailable()
     {
          float timer = 0, timeout = 15f;
-         while (GameState.Instance == null || !GameState.Instance.IsSpawned()) {
-             timer += Time.deltaTime;
-             if(timer > timeout) {
-                  GameManager.Instance?.LogManager?.LogError($"PlayerState {Id} ({PlayerName}): Timed out waiting for GameState to register.");
-                  yield break;
-             }
-             yield return new WaitForSeconds(0.1f);
-         }
+         while (GameState.Instance == null || !GameState.Instance.IsSpawned()) { timer += Time.deltaTime; if(timer > timeout) { yield break; } yield return new WaitForSeconds(0.1f); }
          GameState.Instance.RegisterPlayer(Object.InputAuthority, this);
     }
 
-    // --- Change Detection and Updates ---
+    // --- Change Detection (Fusion 2 Pattern) ---
      public override void Render()
      {
          if (_changeDetector == null || !Object.IsValid) return;
          try {
              foreach (var propertyName in _changeDetector.DetectChanges(this)) {
-                 // Update own monster visuals if own networked monster properties changed
-                 if (Object.HasInputAuthority && (propertyName == nameof(MonsterName) || propertyName == nameof(MonsterHealth) ||
-                     propertyName == nameof(MonsterMaxHealth) || propertyName == nameof(MonsterAttack) ||
-                     propertyName == nameof(MonsterDefense) || propertyName == nameof(MonsterColor)))
-                 {
-                     UpdateLocalMonsterRepresentationFromNetworked();
-                 }
-                 // Update opponent representation if opponent's networked properties changed
-                 else if (!Object.HasInputAuthority) // If this is a remote state...
-                 {
-                     PlayerState localPlayerState = GameState.Instance?.GetLocalPlayerState();
-                      // Check if this remote state *is* the opponent of the local player
-                      if (localPlayerState != null && this == localPlayerState._opponentPlayerState) {
-                         // GameManager.Instance?.LogManager?.LogMessage($"{localPlayerState.PlayerName}: Opponent state ({this.PlayerName}) changed ({propertyName}). Updating local representation.");
-                         localPlayerState.UpdateOpponentMonsterRepresentation(); // Tell local player state to update its view of opponent
-                     }
-                 }
-                 // Handle other property changes (Health, Energy, Score, PlayerName for self or opponent)
-                 else if (propertyName == nameof(Health) || propertyName == nameof(MaxHealth) ||
-                          propertyName == nameof(Energy) || propertyName == nameof(MaxEnergy) ||
-                          propertyName == nameof(Score) || propertyName == nameof(PlayerName))
-                 {
-                      OnStatsChanged?.Invoke(this); // Trigger general stats update (for Player/Opponent UI)
-                      if(propertyName == nameof(PlayerName) && HasStateAuthority) UpdateMonsterNetworkedProperties(); // Resync monster name if player name changed
-                 }
-                 // Handle fight completion status change
-                 else if (propertyName == nameof(IsFightComplete))
-                 {
-                      HandleFightCompleteChange();
+                 if (propertyName == nameof(Health) || propertyName == nameof(MaxHealth) || propertyName == nameof(Energy) || propertyName == nameof(MaxEnergy) || propertyName == nameof(Score) || propertyName == nameof(PlayerName)) {
+                     OnStatsChanged?.Invoke(this); if (propertyName == nameof(PlayerName) && HasStateAuthority) UpdateMonsterNetworkedProperties();
+                 } else if (propertyName == nameof(MonsterName) || propertyName == nameof(MonsterHealth) || propertyName == nameof(MonsterMaxHealth) || propertyName == nameof(MonsterAttack) || propertyName == nameof(MonsterDefense) || propertyName == nameof(MonsterColor)) {
+                     UpdateRepresentationsAfterNetworkChange();
+                 } else if (propertyName == nameof(IsFightComplete)) {
+                     HandleFightCompleteChangeLocally(IsFightComplete);
                  }
              }
-         } catch (Exception ex) {
-              // ** FIXED CS0168 ** Use ex
-              GameManager.Instance?.LogManager?.LogError($"Exception during PlayerState.Render for {PlayerName} (ID: {Id}): {ex.Message}\n{ex.StackTrace}");
-         }
+         } catch (Exception ex) { GameManager.Instance?.LogManager?.LogError($"Exception during PlayerState.Render for {PlayerName} (ID: {Id}): {ex.Message}\n{ex.StackTrace}"); }
      }
 
-     private void HandleFightCompleteChange() {
-          // GameManager.Instance?.LogManager?.LogMessage($"Network Change: Fight completion status for {PlayerName} (ID: {Id}) is now {IsFightComplete}.");
-          if (Object.HasInputAuthority) { // Only react if it's the local player's state
-               if (IsFightComplete && !_isFightOverLocally) {
-                    // GameManager.Instance?.LogManager?.LogMessage($"Network confirms fight COMPLETE for local player {PlayerName}. Ending local simulation.");
-                    EndFightLocally(true); // Assume win? Or determine outcome?
-               } else if (!IsFightComplete && _isFightOverLocally) {
-                    // GameManager.Instance?.LogManager?.LogMessage($"Network confirms fight NOT complete for local player {PlayerName} (likely new round). Resetting local fight state.");
-                    ResetLocalFightStateForNewRound();
-               }
-          }
-     }
+    private void UpdateRepresentationsAfterNetworkChange() { if (Object.HasInputAuthority) UpdateLocalMonsterRepresentationFromNetworked(); PlayerState localPlayerState = GameState.Instance?.GetLocalPlayerState(); if (localPlayerState != null && this == localPlayerState._opponentPlayerState) localPlayerState.UpdateLocalOpponentRepresentation(); }
+    private void HandleFightCompleteChangeLocally(bool isCompleteNetworkValue) { if (Object.HasInputAuthority) { if (isCompleteNetworkValue && !_isFightOverLocally) { _isFightOverLocally = true; _isPlayerTurnActive = false; OnLocalFightOver?.Invoke(true); OnLocalTurnStateChanged?.Invoke(false); } else if (!isCompleteNetworkValue && _isFightOverLocally) ResetLocalFightStateForNewRound(); } }
 
-    // --- Player and Monster Initialization ---
-    private void InitializePlayerName() {
-        if (!HasStateAuthority) return;
-        Player playerComponent = GetAssociatedPlayerComponent();
-        if (playerComponent != null) {
-            string name = playerComponent.GetPlayerName();
-            PlayerName = string.IsNullOrEmpty(name) ? $"Player_{Object.InputAuthority.PlayerId}" : name;
-        } else { PlayerName = $"Player_{Object.InputAuthority.PlayerId}"; }
-         // GameManager.Instance?.LogManager?.LogMessage($"PlayerState {Id}: Initialized name to '{PlayerName}'.");
-    }
-
-    private Player GetAssociatedPlayerComponent() {
-        if (GameManager.Instance?.PlayerManager == null || Object == null) return null;
-        NetworkObject playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(Object.InputAuthority);
-        return playerObject?.GetComponent<Player>();
-    }
-
-    public void UpdateMonsterNetworkedProperties() {
-        if (!HasStateAuthority) return;
-        Monster monster = _monsterManager?.GetPlayerMonster();
-        if (monster != null) {
-            string uniqueName = monster.Name; string currentPName = "";
-            try { currentPName = PlayerName.ToString(); } catch { }
-            if (string.IsNullOrEmpty(uniqueName) || uniqueName == "Your Monster") { uniqueName = !string.IsNullOrEmpty(currentPName) ? $"{currentPName}'s Monster" : $"Monster_{Id}"; monster.Name = uniqueName; }
-            if (MonsterName != uniqueName) MonsterName = uniqueName; if (MonsterHealth != monster.Health) MonsterHealth = monster.Health; if (MonsterMaxHealth != monster.MaxHealth) MonsterMaxHealth = monster.MaxHealth;
-            if (MonsterAttack != monster.Attack) MonsterAttack = monster.Attack; if (MonsterDefense != monster.Defense) MonsterDefense = monster.Defense; if (MonsterColor != monster.TintColor) MonsterColor = monster.TintColor;
-        }
-    }
-
-    // Updates the local *OWN* Monster representation from networked data
-    private void UpdateLocalMonsterRepresentationFromNetworked() {
-        if (_monsterManager == null) return;
-        try {
-            _monsterManager.UpdateLocalMonsterFromNetworked(
-                MonsterName.ToString(), MonsterHealth, MonsterMaxHealth,
-                MonsterAttack, MonsterDefense, MonsterColor
-            );
-             Monster currentMonster = _monsterManager.GetPlayerMonster();
-             if (currentMonster != null) { OnPlayerMonsterChanged?.Invoke(currentMonster); }
-        } catch (Exception ex) {
-             // ** FIXED CS0168 ** Use ex
-             GameManager.Instance?.LogManager?.LogError($"UpdateLocalMonsterRep Error for {PlayerName} (ID: {Id}): {ex.Message}");
-         }
-    }
-
-     // Updates the internal representation of the opponent's monster
-     // This is called by Render when the opponent's state changes, OR by SetOpponentMonsterLocally
-    private void UpdateOpponentMonsterRepresentation()
-    {
-        if (_opponentPlayerState != null && _opponentPlayerState.Object != null && _opponentPlayerState.Object.IsValid) {
-            if (_opponentMonsterRepresentation == null) _opponentMonsterRepresentation = new Monster();
-            try {
-                 string oppStateMonsterName = _opponentPlayerState.MonsterName.ToString();
-                 int oppStateHealth = _opponentPlayerState.MonsterHealth;
-                 int oppStateMaxHealth = _opponentPlayerState.MonsterMaxHealth;
-                 // GameManager.Instance?.LogManager?.LogMessage($"{PlayerName}: Reading opponent state ({_opponentPlayerState.PlayerName}): Monster='{oppStateMonsterName}', Health={oppStateHealth}/{oppStateMaxHealth}");
-
-                _opponentMonsterRepresentation.Name = oppStateMonsterName;
-                _opponentMonsterRepresentation.MaxHealth = oppStateMaxHealth;
-                _opponentMonsterRepresentation.SetHealth(oppStateHealth);
-                _opponentMonsterRepresentation.Attack = _opponentPlayerState.MonsterAttack;
-                _opponentMonsterRepresentation.Defense = _opponentPlayerState.MonsterDefense;
-                _opponentMonsterRepresentation.TintColor = _opponentPlayerState.MonsterColor;
-                _opponentMonsterRepresentation.ResetBlockLocally(); // Block is local state
-                _opponentMonsterDataReady = true;
-            } catch (Exception ex) {
-                 GameManager.Instance?.LogManager?.LogError($"UpdateOpponentMonsterRep Error for {PlayerName}'s opponent ({_opponentPlayerState?.PlayerName}): {ex.Message}");
-                 _opponentMonsterDataReady = false;
-            }
-        } else {
-             if (_opponentMonsterRepresentation != null) { _opponentMonsterRepresentation = null; }
-            _opponentMonsterDataReady = false;
-        }
-    }
+    // --- Player and Monster Initialization & Syncing ---
+    private void InitializePlayerName() { if (!HasStateAuthority) return; Player playerComponent = GetAssociatedPlayerComponent(); PlayerName = playerComponent != null && !string.IsNullOrEmpty(playerComponent.GetPlayerName()) ? playerComponent.GetPlayerName() : $"Player_{Object.InputAuthority.PlayerId}"; }
+    private Player GetAssociatedPlayerComponent() { if (GameManager.Instance?.PlayerManager == null || Object == null) return null; NetworkObject playerObject = GameManager.Instance.PlayerManager.GetPlayerObject(Object.InputAuthority); return playerObject?.GetComponent<Player>(); }
+    public void UpdateMonsterNetworkedProperties() { if (!HasStateAuthority || _monsterManager == null) return; Monster monster = _monsterManager.GetPlayerMonster(); if (monster != null) { string uniqueName = monster.Name; string currentPName = ""; try { currentPName = PlayerName.ToString(); } catch { } if (string.IsNullOrEmpty(uniqueName) || uniqueName == "Your Monster" || uniqueName.StartsWith("Monster_")) { uniqueName = !string.IsNullOrEmpty(currentPName) ? $"{currentPName}'s Monster" : $"Monster_{Id}"; monster.Name = uniqueName; } if (MonsterName != uniqueName) MonsterName = uniqueName; if (MonsterHealth != monster.Health) MonsterHealth = monster.Health; if (MonsterMaxHealth != monster.MaxHealth) MonsterMaxHealth = monster.MaxHealth; if (MonsterAttack != monster.Attack) MonsterAttack = monster.Attack; if (MonsterDefense != monster.Defense) MonsterDefense = monster.Defense; if (MonsterColor != monster.TintColor) MonsterColor = monster.TintColor; } }
+    private void UpdateLocalMonsterRepresentationFromNetworked() { if (_monsterManager == null) return; try { _monsterManager.UpdateLocalMonsterFromNetworked( MonsterName.ToString(), MonsterHealth, MonsterMaxHealth, MonsterAttack, MonsterDefense, MonsterColor); Monster currentMonster = _monsterManager.GetPlayerMonster(); if (currentMonster != null) OnPlayerMonsterChanged?.Invoke(currentMonster); } catch (Exception ex) { GameManager.Instance?.LogManager?.LogError($"UpdateLocalMonsterRep Error for {PlayerName} (ID: {Id}): {ex.Message}"); } }
+    private void UpdateLocalOpponentRepresentation() { if (_opponentPlayerState != null && _opponentPlayerState.Object != null && _opponentPlayerState.Object.IsValid) { if (_opponentMonsterRepresentation == null) _opponentMonsterRepresentation = new Monster(); try { _opponentMonsterRepresentation.Name = _opponentPlayerState.MonsterName.ToString(); _opponentMonsterRepresentation.MaxHealth = _opponentPlayerState.MonsterMaxHealth; _opponentMonsterRepresentation.SetHealth(_opponentPlayerState.MonsterHealth); _opponentMonsterRepresentation.Attack = _opponentPlayerState.MonsterAttack; _opponentMonsterRepresentation.Defense = _opponentPlayerState.MonsterDefense; _opponentMonsterRepresentation.TintColor = _opponentPlayerState.MonsterColor; _opponentMonsterRepresentation.ResetBlockLocally(); _opponentMonsterDataReady = true; OnOpponentMonsterChanged?.Invoke(_opponentMonsterRepresentation); } catch (Exception ex) { _opponentMonsterDataReady = false; OnOpponentMonsterChanged?.Invoke(null); GameManager.Instance?.LogManager?.LogError($"UpdateOpponentMonsterRep Error for {PlayerName}'s opponent ({_opponentPlayerState?.PlayerName}): {ex.Message}"); } } else { if (_opponentMonsterRepresentation != null) { _opponentMonsterRepresentation = null; OnOpponentMonsterChanged?.Invoke(null); } _opponentMonsterDataReady = false; } }
 
     // --- Local Hand Management ---
-    public void DrawInitialHandLocally() {
-        if (!Object.HasInputAuthority || _cardManager == null) return;
-        _cardManager.CreateStartingDeck(); _cardManager.ShuffleDeck(); _cardManager.DrawToHandSize();
-        OnHandChanged?.Invoke(this, _cardManager.GetHand());
-    }
-    public void DrawNewHandLocally() {
-        if (!Object.HasInputAuthority || _cardManager == null) return;
-        _cardManager.PrepareForNewRound();
-        OnHandChanged?.Invoke(this, _cardManager.GetHand());
-    }
+    public void DrawInitialHandLocally() { if (!Object.HasInputAuthority || _cardManager == null) return; _cardManager.CreateStartingDeck(); _cardManager.ShuffleDeck(); _cardManager.DrawToHandSize(); OnHandChanged?.Invoke(this, _cardManager.GetHand()); }
+    public void DrawNewHandLocally() { if (!Object.HasInputAuthority || _cardManager == null) return; _cardManager.PrepareForNewRound(); OnHandChanged?.Invoke(this, _cardManager.GetHand()); }
 
     // --- Local Turn and Fight Logic ---
-    public void PlayCardLocally(int cardIndex, Monster target) {
+    public void PlayCardLocally(int cardIndex, Monster target) { // target here is the logical monster (own or opponent rep)
         if (!Object.HasInputAuthority || _isFightOverLocally || !_isPlayerTurnActive || _cardManager == null || _monsterManager == null) return;
-        List<CardData> hand = _cardManager.GetHand();
-        if (cardIndex < 0 || cardIndex >= hand.Count) return;
-        CardData card = hand[cardIndex];
+        List<CardData> hand = _cardManager.GetHand(); if (cardIndex < 0 || cardIndex >= hand.Count) return; CardData card = hand[cardIndex];
         try { if (Energy < card.EnergyCost) return; } catch { return; }
-
-        Monster playerMonster = _monsterManager.GetPlayerMonster();
-        bool isTargetingOwnMonster = (target == playerMonster);
-        bool isTargetingOpponentMonster = (target == _opponentMonsterRepresentation);
-
-        if (!PlayerStateValidator.IsValidMonsterTarget(card, target, isTargetingOwnMonster)) {
-             if (card.Target != CardTarget.Self && card.Target != CardTarget.Enemy && card.Target != CardTarget.AllEnemies && card.Target != CardTarget.All) {
-                  isTargetingOwnMonster = true; isTargetingOpponentMonster = false;
-             } else { return; }
-        }
+        Monster playerMonster = _monsterManager.GetPlayerMonster(); bool isTargetingOwnMonster = (target == playerMonster); bool isTargetingOpponentMonster = (target == _opponentMonsterRepresentation);
+        GameManager.Instance?.LogManager?.LogMessage($"PlayCardLocally: Attacker={Object.InputAuthority}, Target Monster='{target?.Name ?? "NULL"}', OpponentRef='{_opponentPlayerRef}', isTargetingOpponent={isTargetingOpponentMonster}");
+        if (!PlayerStateValidator.IsValidMonsterTarget(card, target, isTargetingOwnMonster)) { if (card.Target != CardTarget.Self && card.Target != CardTarget.Enemy && card.Target != CardTarget.AllEnemies && card.Target != CardTarget.All) { target = null; isTargetingOwnMonster = false; isTargetingOpponentMonster = false; } else return; }
 
         RPC_RequestModifyEnergy(-card.EnergyCost);
         ApplyCardEffectsLocally(card, target, isTargetingOwnMonster, isTargetingOpponentMonster);
+
         if (isTargetingOpponentMonster && card.DamageAmount > 0 && _opponentPlayerRef != default) {
-            RPC_RequestApplyDamageToOpponent(_opponentPlayerRef, card.DamageAmount);
+            GameManager.Instance?.LogManager?.LogMessage($"PlayCardLocally: Announcing damage to Target PlayerRef: {_opponentPlayerRef}, Damage: {card.DamageAmount}");
+            RPC_AnnounceDamage(_opponentPlayerRef, card.DamageAmount);
         }
-        _cardManager.PlayCard(cardIndex);
-        OnHandChanged?.Invoke(this, _cardManager.GetHand());
-        CheckLocalFightEndCondition();
+
+        _cardManager.PlayCard(cardIndex); OnHandChanged?.Invoke(this, _cardManager.GetHand()); CheckLocalFightEndCondition();
     }
 
     private void ApplyCardEffectsLocally(CardData card, Monster target, bool isTargetingOwn, bool isTargetingOpponent) {
         Monster ownMonster = _monsterManager?.GetPlayerMonster();
-        if (isTargetingOwn && ownMonster != null) {
-            if (card.BlockAmount > 0) ownMonster.AddBlock(card.BlockAmount);
-            if (card.HealAmount > 0) { int oldH = ownMonster.Health; ownMonster.Heal(card.HealAmount); if(oldH != ownMonster.Health) RPC_RequestModifyMonsterHealth(ownMonster.Health); }
-            OnPlayerMonsterChanged?.Invoke(ownMonster);
-        } else if (isTargetingOpponent && _opponentMonsterRepresentation != null) {
-            OnOpponentMonsterChanged?.Invoke(_opponentMonsterRepresentation); // Update UI prediction/state
-        }
+        if (isTargetingOwn && ownMonster != null) { if (card.BlockAmount > 0) ownMonster.AddBlock(card.BlockAmount); if (card.HealAmount > 0) { int oldH = ownMonster.Health; ownMonster.Heal(card.HealAmount); if (oldH != ownMonster.Health) RPC_RequestModifyOwnMonsterHealth(ownMonster.Health); } OnPlayerMonsterChanged?.Invoke(ownMonster); }
         if (card.EnergyGain > 0) RPC_RequestModifyEnergy(card.EnergyGain);
-        if (card.DrawAmount > 0 && Object.HasInputAuthority && _cardManager != null) {
-             for (int i = 0; i < card.DrawAmount; i++) { if (!_cardManager.DrawCard()) break; }
-            OnHandChanged?.Invoke(this, _cardManager.GetHand());
+        if (card.DrawAmount > 0 && Object.HasInputAuthority && _cardManager != null) { for (int i = 0; i < card.DrawAmount; i++) { if (!_cardManager.DrawCard()) break; } OnHandChanged?.Invoke(this, _cardManager.GetHand()); }
+    }
+
+    // --- RPCs ---
+
+    // RPC: Sent By Attacker --> All Clients
+    [Rpc(RpcSources.All, RpcTargets.All)]
+    private void RPC_AnnounceDamage(PlayerRef targetPlayerRef, int damageAmount, RpcInfo info = default)
+    {
+        int localPlayerId = Runner.LocalPlayer.PlayerId;
+        int targetPlayerId = targetPlayerRef.PlayerId;
+        bool isTarget = localPlayerId == targetPlayerId;
+
+        GameManager.Instance?.LogManager?.LogMessage($"Client {Runner.LocalPlayer}: Received RPC_AnnounceDamage. TargetRef={targetPlayerRef} (ID:{targetPlayerId}), Dmg={damageAmount}. Comparing with Local ID:{localPlayerId}. IsTarget = {isTarget}");
+
+        if (isTarget)
+        {
+            GameManager.Instance?.LogManager?.LogMessage($"Client {Runner.LocalPlayer}: Target matches self. Calling RPC_ExecuteLocalDamage (StateAuthority Targeted)...");
+            // Call the RPC that targets StateAuthority - this client *should* be the State Authority for itself.
+            this.RPC_ExecuteLocalDamage(damageAmount);
         }
     }
 
-    [Rpc(RpcSources.All, RpcTargets.StateAuthority)]
-    private void RPC_RequestApplyDamageToOpponent(PlayerRef opponentPlayerRef, int damageAmount, RpcInfo info = default) {
-        if (GameState.Instance == null) return; PlayerState opponentState = GameState.Instance.GetPlayerState(opponentPlayerRef);
-        if (opponentState?.Object?.IsValid ?? false) { opponentState.RPC_TakeDamageOnMonster(damageAmount); }
+    // ** REVISED RPC: Targets State Authority **
+    // Called locally by the target of RPC_AnnounceDamage.
+    // This RPC will execute *only* on the client that holds State Authority for this specific PlayerState object.
+    // In default Shared Mode, this should be the same client that holds Input Authority.
+    [Rpc(RpcSources.All, RpcTargets.StateAuthority)] // Changed Target to StateAuthority
+    private void RPC_ExecuteLocalDamage(int damageAmount, RpcInfo info = default)
+    {
+        // This code now executes ONLY on the State Authority for this PlayerState object.
+        GameManager.Instance?.LogManager?.LogMessage($"{PlayerName} ({Runner.LocalPlayer}): Executing RPC_ExecuteLocalDamage (State Authority Check Implicit via RpcTarget). Applying {damageAmount} damage.");
+
+        // No need for explicit 'if (HasStateAuthority)' check here, as the RPC target ensures it.
+        // However, defensive checks are still good practice.
+        if (!HasStateAuthority) {
+             GameManager.Instance?.LogManager?.LogError($"{PlayerName} ({Runner.LocalPlayer}): executing RPC_ExecuteLocalDamage BUT HasStateAuthority is FALSE! This indicates a critical authority mismatch.");
+             return;
+        }
+
+        if (_monsterManager == null) { GameManager.Instance?.LogManager?.LogError($"{PlayerName}: MonsterManager is null in RPC_ExecuteLocalDamage."); return; }
+        Monster monster = _monsterManager.GetPlayerMonster(); // Get own monster
+
+        GameManager.Instance?.LogManager?.LogMessage($"{PlayerName} ({Runner.LocalPlayer}): Applying {damageAmount} damage via RPC_ExecuteLocalDamage to monster named '{monster?.Name ?? "NULL"}'");
+
+        if (monster != null)
+        {
+            int hBeforeNetworked = MonsterHealth;
+            monster.TakeDamage(damageAmount); // Apply damage LOCALLY first
+            int hAfterLocal = monster.Health;
+
+            if (hBeforeNetworked != hAfterLocal)
+            {
+                // Update the NETWORKED property (we have State Authority here)
+                MonsterHealth = hAfterLocal;
+                if (MonsterHealth <= 0 && !IsFightComplete)
+                {
+                    // Update the NETWORKED property (we have State Authority here)
+                    SetFightCompleteStatusAuthority(true);
+                }
+            }
+        } else { GameManager.Instance?.LogManager?.LogError($"{PlayerName}: Monster is null in RPC_ExecuteLocalDamage."); }
     }
 
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_TakeDamageOnMonster(int damageAmount, RpcInfo info = default) {
-        if (!HasStateAuthority || _monsterManager == null) return; Monster monster = _monsterManager.GetPlayerMonster();
-        if (monster != null) { int hBefore = monster.Health; monster.TakeDamage(damageAmount); if (MonsterHealth != monster.Health) { MonsterHealth = monster.Health; if (monster.IsDefeated()) SetFightCompleteStatus(true); } }
-    }
 
-    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestModifyEnergy(int amount, RpcInfo info = default) => ModifyEnergy(amount);
-    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestModifyMonsterHealth(int newHealth, RpcInfo info = default) => ModifyMonsterHealth(newHealth);
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestModifyEnergy(int amount, RpcInfo info = default) { if (HasStateAuthority) Energy = Mathf.Clamp(Energy + amount, 0, MaxEnergy); else { GameManager.Instance?.LogManager?.LogError($"{PlayerName}: RPC_RequestModifyEnergy received but lacks State Authority!"); } }
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestModifyOwnMonsterHealth(int newHealth, RpcInfo info = default) { if (HasStateAuthority) { newHealth = Mathf.Clamp(newHealth, 0, MonsterMaxHealth); if (MonsterHealth != newHealth) MonsterHealth = newHealth; } else { GameManager.Instance?.LogManager?.LogError($"{PlayerName}: RPC_RequestModifyOwnMonsterHealth received but lacks State Authority!"); } }
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)] public void RPC_PrepareForNewRound(RpcInfo info = default) { ResetLocalFightStateForNewRound(); }
 
-    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
-    public void RPC_PrepareForNewRound(RpcInfo info = default) { ResetLocalFightStateForNewRound(); }
-
-    private void ResetLocalFightStateForNewRound() {
-         _isFightOverLocally = false; _isPlayerTurnActive = true; _monsterManager?.ResetPlayerMonsterLocally();
-         _opponentMonsterRepresentation = null; _opponentMonsterDataReady = false;
-         OnOpponentMonsterChanged?.Invoke(null); // Trigger null to clear UI
-         OnLocalTurnStateChanged?.Invoke(_isPlayerTurnActive); OnLocalFightOver?.Invoke(false); OnStatsChanged?.Invoke(this);
-         if (Object.HasInputAuthority && _cardManager != null) { OnHandChanged?.Invoke(this, _cardManager.GetHand()); }
-    }
+    private void ResetLocalFightStateForNewRound() { _isFightOverLocally = false; _isPlayerTurnActive = true; _monsterManager?.ResetPlayerMonsterLocally(); _opponentMonsterRepresentation = null; _opponentMonsterDataReady = false; OnOpponentMonsterChanged?.Invoke(null); OnLocalTurnStateChanged?.Invoke(_isPlayerTurnActive); OnLocalFightOver?.Invoke(false); if (Object.HasInputAuthority && _cardManager != null) DrawNewHandLocally(); }
 
     // --- Authority Methods ---
-    public void ModifyHealth(int amount) { if (HasStateAuthority) Health = Mathf.Clamp(Health + amount, 0, MaxHealth); }
-    public void ModifyMonsterHealth(int newHealth) { if (!HasStateAuthority) return; newHealth = Mathf.Clamp(newHealth, 0, MonsterMaxHealth); if (MonsterHealth != newHealth) { MonsterHealth = newHealth; if (MonsterHealth <= 0 && !IsFightComplete) SetFightCompleteStatus(true); } }
-    public void ModifyEnergy(int amount) { if (HasStateAuthority) Energy = Mathf.Clamp(Energy + amount, 0, MaxEnergy); }
-    public void SetEnergy(int value) { if (HasStateAuthority) Energy = Mathf.Clamp(value, 0, MaxEnergy); }
-    public void IncreaseScore(int amount = 1) { if (HasStateAuthority && amount > 0) Score += amount; }
-    private void SetFightCompleteStatus(bool isComplete) { if (!HasStateAuthority || IsFightComplete == isComplete) return; IsFightComplete = isComplete; }
+    public void SetEnergyAuthority(int value) { if (!HasStateAuthority) return; Energy = Mathf.Clamp(value, 0, MaxEnergy); }
+    public void IncreaseScoreAuthority(int amount = 1) { if (!HasStateAuthority || amount <= 0) return; Score += amount; }
+    private void SetFightCompleteStatusAuthority(bool isComplete) { if (!HasStateAuthority || IsFightComplete == isComplete) return; IsFightComplete = isComplete; }
 
     // --- Local Fight Simulation ---
-    public void EndPlayerTurnLocally() {
-         if (!Object.HasInputAuthority || !_isPlayerTurnActive || _isFightOverLocally) return;
-        _isPlayerTurnActive = false; _monsterManager?.GetPlayerMonster()?.ResetBlockLocally();
-        OnPlayerMonsterChanged?.Invoke(_monsterManager?.GetPlayerMonster()); OnLocalTurnStateChanged?.Invoke(false);
-        if (!CheckLocalFightEndCondition()) StartCoroutine(SimulateMonsterTurnLocally());
-    }
-
-    // ** FIXED CS0161 HERE **
-    private IEnumerator SimulateMonsterTurnLocally() {
-         if (!Object.HasInputAuthority) yield break; // Added break
-        yield return new WaitForSeconds(1.0f);
-        if (_isFightOverLocally) yield break; // Added break
-
-        Monster ownMonster = _monsterManager?.GetPlayerMonster(); Monster opponentRep = _opponentMonsterRepresentation;
-        if (ownMonster != null && opponentRep != null && !opponentRep.IsDefeated()) {
-            CardData monsterAttack = opponentRep.ChooseAction(); int healthBefore = ownMonster.Health; ownMonster.TakeDamage(monsterAttack.DamageAmount);
-            OnPlayerMonsterChanged?.Invoke(ownMonster); if (healthBefore != ownMonster.Health) RPC_RequestModifyMonsterHealth(ownMonster.Health);
-            if (ownMonster.IsDefeated()) CheckLocalFightEndCondition(); // This might set _isFightOverLocally
-        }
-        // Check again if fight ended during the above block
-        if (!_isFightOverLocally) {
-             EndMonsterTurnLocally();
-        }
-        yield break; // Ensure all paths yield or break
-    }
-
-    private void EndMonsterTurnLocally() {
-         if (!Object.HasInputAuthority || _isFightOverLocally) return;
-        _opponentMonsterRepresentation?.ResetBlockLocally(); OnOpponentMonsterChanged?.Invoke(_opponentMonsterRepresentation);
-        if (CheckLocalFightEndCondition()) return;
-        _isPlayerTurnActive = true; RPC_RequestSetEnergy(MaxEnergy); OnLocalTurnStateChanged?.Invoke(true);
-    }
-
-    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestSetEnergy(int value, RpcInfo info = default) => SetEnergy(value);
-
-    private bool CheckLocalFightEndCondition() {
-         if (_isFightOverLocally || !Object.HasInputAuthority) return _isFightOverLocally;
-        Monster playerMonster = _monsterManager?.GetPlayerMonster(); Monster opponentMonsterRep = _opponentMonsterRepresentation;
-        bool playerLost = playerMonster?.IsDefeated() ?? false;
-        bool opponentLost = (_opponentPlayerState?.Object?.IsValid ?? false) ? _opponentPlayerState.MonsterHealth <= 0 : (opponentMonsterRep?.IsDefeated() ?? false);
-        bool playerWon = opponentLost;
-        if (playerWon || playerLost) { EndFightLocally(playerWon); return true; }
-        return false;
-    }
-    private void EndFightLocally(bool didWin) {
-         if (_isFightOverLocally || !Object.HasInputAuthority) return;
-        _isFightOverLocally = true; _isPlayerTurnActive = false;
-        OnLocalFightOver?.Invoke(true); OnLocalTurnStateChanged?.Invoke(false);
-        if (didWin) RPC_RequestScoreIncrease();
-        if (GameState.Instance != null) GameState.Instance.RPC_NotifyFightComplete(Object.InputAuthority);
-        RPC_RequestSetFightComplete(true);
-    }
-    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestSetFightComplete(bool status, RpcInfo info = default) => SetFightCompleteStatus(status);
-    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
-    private void RPC_RequestScoreIncrease(int amount = 1, RpcInfo info = default) {
-         if (_opponentPlayerState?.Object?.IsValid ?? false && _opponentPlayerState.MonsterHealth <= 0) { IncreaseScore(amount); }
-    }
+    public void EndPlayerTurnLocally() { if (!Object.HasInputAuthority || !_isPlayerTurnActive || _isFightOverLocally) return; _isPlayerTurnActive = false; _monsterManager?.GetPlayerMonster()?.ResetBlockLocally(); OnPlayerMonsterChanged?.Invoke(_monsterManager?.GetPlayerMonster()); OnLocalTurnStateChanged?.Invoke(false); if (!CheckLocalFightEndCondition()) StartCoroutine(SimulateMonsterTurnLocally()); }
+    private IEnumerator SimulateMonsterTurnLocally() { if (!Object.HasInputAuthority) yield break; yield return new WaitForSeconds(1.0f); if (_isFightOverLocally) yield break; Monster ownMonster = _monsterManager?.GetPlayerMonster(); Monster opponentRep = _opponentMonsterRepresentation; if (ownMonster != null && opponentRep != null && !opponentRep.IsDefeated()) { CardData monsterAttack = opponentRep.ChooseAction(); int healthBefore = ownMonster.Health; ownMonster.TakeDamage(monsterAttack.DamageAmount); OnPlayerMonsterChanged?.Invoke(ownMonster); if (healthBefore != ownMonster.Health) RPC_RequestModifyOwnMonsterHealth(ownMonster.Health); if (ownMonster.IsDefeated()) CheckLocalFightEndCondition(); } if (!_isFightOverLocally) EndMonsterTurnLocally(); yield break; }
+    private void EndMonsterTurnLocally() { if (!Object.HasInputAuthority || _isFightOverLocally) return; _opponentMonsterRepresentation?.ResetBlockLocally(); OnOpponentMonsterChanged?.Invoke(_opponentMonsterRepresentation); if (CheckLocalFightEndCondition()) return; _isPlayerTurnActive = true; RPC_RequestSetEnergy(MaxEnergy); OnLocalTurnStateChanged?.Invoke(true); }
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestSetEnergy(int value, RpcInfo info = default) { SetEnergyAuthority(value); }
+    private bool CheckLocalFightEndCondition() { if (_isFightOverLocally || !Object.HasInputAuthority) return _isFightOverLocally; Monster playerMonster = _monsterManager?.GetPlayerMonster(); bool opponentLostNetwork = (_opponentPlayerState?.Object?.IsValid ?? false) && _opponentPlayerState.MonsterHealth <= 0; bool playerLost = playerMonster?.IsDefeated() ?? false; bool playerWon = opponentLostNetwork; if (playerWon || playerLost) { EndFightLocally(playerWon); return true; } return false; }
+    private void EndFightLocally(bool didWin) { if (_isFightOverLocally || !Object.HasInputAuthority) return; _isFightOverLocally = true; _isPlayerTurnActive = false; OnLocalFightOver?.Invoke(true); OnLocalTurnStateChanged?.Invoke(false); if (didWin) RPC_RequestScoreIncrease(); if (GameState.Instance != null) GameState.Instance.RPC_NotifyFightComplete(Object.InputAuthority); RPC_RequestSetFightComplete(true); }
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestSetFightComplete(bool status, RpcInfo info = default) { SetFightCompleteStatusAuthority(status); }
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)] private void RPC_RequestScoreIncrease(int amount = 1, RpcInfo info = default) { if (HasStateAuthority) { bool opponentDefeated = (_opponentPlayerState?.Object?.IsValid ?? false) && _opponentPlayerState.MonsterHealth <= 0; if (opponentDefeated) IncreaseScoreAuthority(amount); else { /* Log Warning */ } } else { GameManager.Instance?.LogManager?.LogError($"{PlayerName}: RPC_RequestScoreIncrease received but lacks State Authority!"); } }
 
     // --- Getters ---
-    public Monster GetMonster() => _monsterManager?.GetPlayerMonster();
-    public Monster GetOpponentMonster() => _opponentMonsterRepresentation;
-    public bool IsOpponentMonsterReady() => _opponentMonsterDataReady && _opponentMonsterRepresentation != null;
-    public List<CardData> GetHand() => _cardManager?.GetHand() ?? new List<CardData>();
-    public PlayerRef GetOpponentPlayerRef() => _opponentPlayerRef;
-    public int GetScore() => Score;
-    public bool GetIsLocalPlayerTurn() => Object.HasInputAuthority && _isPlayerTurnActive && !_isFightOverLocally;
-    public bool GetIsLocalFightOver() => _isFightOverLocally;
+    public Monster GetMonster() => _monsterManager?.GetPlayerMonster(); public Monster GetOpponentMonster() => _opponentMonsterRepresentation; public bool IsOpponentMonsterReady() => _opponentMonsterDataReady && _opponentMonsterRepresentation != null; public List<CardData> GetHand() => _cardManager?.GetHand() ?? new List<CardData>(); public PlayerRef GetOpponentPlayerRef() => _opponentPlayerRef; public int GetScore() => Score; public bool GetIsLocalPlayerTurn() => Object.HasInputAuthority && _isPlayerTurnActive && !_isFightOverLocally; public bool GetIsLocalFightOver() => _isFightOverLocally;
 
     // --- Setting Opponent ---
-    // Called locally by GameState's RPC_SetMonsterMatchup
-    public void SetOpponentMonsterLocally(PlayerRef opponentRef, PlayerState opponentState)
-    {
-        if (!Object.HasInputAuthority) return; // Only process for the local player
-
-        // ** Critical Check: Prevent setting self as opponent **
-        if (opponentState == this || opponentRef == Object.InputAuthority) {
-            GameManager.Instance?.LogManager?.LogError($"{PlayerName}: CRITICAL ERROR - Attempted to set self (Ref: {opponentRef}) as opponent!");
-            return;
-        }
-
-        bool opponentChanged = (_opponentPlayerRef != opponentRef);
-        // GameManager.Instance?.LogManager?.LogMessage($"{PlayerName}: SetOpponentMonsterLocally called. New OpponentRef: {opponentRef}, Opponent State ID: {opponentState?.Id.ToString() ?? "NULL"}, Changed: {opponentChanged}");
-
-        _opponentPlayerRef = opponentRef;
-        _opponentPlayerState = opponentState;
-
-        // Update internal representation immediately
-        UpdateOpponentMonsterRepresentation();
-
-        // Trigger event if data is now ready OR if opponent changed (to clear old display)
-        string monsterNameToLog = _opponentMonsterRepresentation?.Name ?? "null";
-        // GameManager.Instance?.LogManager?.LogMessage($"{PlayerName}: Post UpdateOpponentMonsterRepresentation. Ready: {_opponentMonsterDataReady}, Monster: {monsterNameToLog}");
-
-        if (_opponentMonsterDataReady) {
-            // GameManager.Instance?.LogManager?.LogMessage($"{PlayerName}: Triggering OnOpponentMonsterChanged with monster: {monsterNameToLog}");
-             OnOpponentMonsterChanged?.Invoke(_opponentMonsterRepresentation);
-        } else if (opponentChanged) {
-            // GameManager.Instance?.LogManager?.LogMessage($"{PlayerName}: Opponent changed but data not ready. Triggering OnOpponentMonsterChanged with NULL.");
-             OnOpponentMonsterChanged?.Invoke(null); // Clear old display
-        }
-    }
+    public void SetOpponentMonsterLocally(PlayerRef opponentRef, PlayerState opponentState) { if (!Object.HasInputAuthority) return; if (opponentState == this || opponentRef == Object.InputAuthority) { /* Log Error */ return; } _opponentPlayerRef = opponentRef; _opponentPlayerState = opponentState; UpdateLocalOpponentRepresentation(); }
 
     // --- Despawn ---
-    public override void Despawned(NetworkRunner runner, bool hasState)
-    {
-        base.Despawned(runner, hasState);
-         if (GameState.Instance != null && Object != null) GameState.Instance.UnregisterPlayer(Object.InputAuthority);
-         _cardManager = null; _monsterManager = null; _opponentMonsterRepresentation = null; _opponentPlayerState = null;
-    }
-}
+    public override void Despawned(NetworkRunner runner, bool hasState) { base.Despawned(runner, hasState); if (GameState.Instance != null && Object != null && Object.IsValid) GameState.Instance.UnregisterPlayer(Object.InputAuthority); _cardManager = null; _monsterManager = null; _opponentMonsterRepresentation = null; _opponentPlayerState = null; }
+
+} // End of PlayerState class
