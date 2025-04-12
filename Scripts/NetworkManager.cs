@@ -312,25 +312,47 @@ public class NetworkManager : MonoBehaviour, INetworkRunnerCallbacks
         GameManager.Instance.LogManager.LogMessage(playerCountMessage);
     }
 
-    public void OnInput(NetworkRunner runner, NetworkInput input)
+    // Inside NetworkManager.cs
+
+#region INetworkRunnerCallbacks Implementation
+
+// ... (other callbacks like OnPlayerJoined, OnPlayerLeft, etc.) ...
+
+// Inside NetworkManager.cs -> OnInput
+
+// Inside NetworkManager.cs
+
+public void OnInput(NetworkRunner runner, NetworkInput input)
+{
+    var data = new NetworkInputData(); // Default input
+
+    // Find the PlayerState component for the *local* player
+    // *** CORRECTED PlayerRef Validity Check ***
+    if (runner != null && runner.LocalPlayer != PlayerRef.None && GameManager.Instance != null && GameManager.Instance.PlayerManager != null)
     {
-        // Create and provide input data from the local player
-        var data = new NetworkInputData
+        NetworkObject localPlayerObject = GameManager.Instance.PlayerManager.GetPlayerObject(runner.LocalPlayer);
+        if (localPlayerObject != null)
         {
-            horizontal = Input.GetAxis("Horizontal"),
-            vertical = Input.GetAxis("Vertical"),
-            buttons = new NetworkButtons()
-        };
-
-        // Add button presses if needed
-        if (Input.GetKeyDown(KeyCode.Space))
-            data.buttons.Set(0, true); // Jump
-        if (Input.GetKeyDown(KeyCode.R))
-            data.buttons.Set(1, true); // Ready toggle
-
-        // Set the input data
-        input.Set(data);
+            PlayerState localPlayerState = localPlayerObject.GetComponent<PlayerState>();
+            if (localPlayerState != null)
+            {
+                // Poll the PlayerState for any queued input actions
+                data = localPlayerState.PollQueuedInput();
+            }
+            // else { Debug.LogWarning($"NetworkManager.OnInput: Local PlayerState component not found on object {localPlayerObject.Id}"); }
+        }
+        // else { Debug.LogWarning($"NetworkManager.OnInput: Local player object not found for player {runner.LocalPlayer}"); }
     }
+
+    // Set the polled input (or default)
+    input.Set(data);
+}
+
+// ... (rest of INetworkRunnerCallbacks methods) ...
+
+#endregion
+
+// ... (rest of NetworkManager.cs) ...
 
     public void OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input) { }
 
